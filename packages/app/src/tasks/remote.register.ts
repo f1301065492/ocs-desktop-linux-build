@@ -18,6 +18,9 @@ import { AutomationScript } from '../scripts/script';
 import { getBrowserMajorVersion, getExtensionPaths } from '../utils/browser';
 import { AppStore } from '../../types';
 import { encryptRenderString, decryptRenderString } from '../crypto';
+import { attachRendererWindow, getRemoteApiStatus, restartRemoteApi } from './remote.api';
+import { clearApiKey, generateApiKey, setApiKey, updateRemoteApiConfig } from './remote.api/config';
+import { regenerateTlsMaterial } from './remote.api/tls';
 
 export type RawAutomationScript = Pick<AutomationScript, 'configs' | 'name'>;
 
@@ -93,6 +96,53 @@ function registerRemoteEvent(name: string, target: any) {
 
 let win: BrowserWindow | undefined;
 
+/**
+ * 获取主窗口。
+ *
+ * 不要用 getCurrentWebContents()：bootstrap 里 startupServer() 与 createWindow()
+ * 是并行的两个分支，服务器完全可能先于窗口就绪，此时
+ * BrowserWindow.getAllWindows()[0] 是 undefined 会直接抛异常。
+ */
+export function getMainWindow(): BrowserWindow | undefined {
+	return win;
+}
+
+const REMOTE_API_BIND_ADDRESSES = ['0.0.0.0', '127.0.0.1'];
+
+/** 白名单式地构造远程 API 配置补丁，绝不让渲染进程直接写 keyHash / keySalt 等字段 */
+function sanitizeRemoteApiPatch(patch: any): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	if (!patch || typeof patch !== 'object') {
+		return result;
+	}
+	if ('enabled' in patch) {
+		result.enabled = Boolean(patch.enabled);
+	}
+	if ('port' in patch) {
+		const port = Number(patch.port);
+		if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+			throw new Error('端口必须是 1024-65535 之间的整数');
+		}
+		result.port = port;
+	}
+	if ('bindAddress' in patch) {
+		if (!REMOTE_API_BIND_ADDRESSES.includes(patch.bindAddress)) {
+			throw new Error(`监听地址只能是 ${REMOTE_API_BIND_ADDRESSES.join(' 或 ')}`);
+		}
+		result.bindAddress = patch.bindAddress;
+	}
+	for (const key of ['launchTimeoutMs', 'closeTimeoutMs', 'maxConcurrentLaunches'] as const) {
+		if (key in patch) {
+			const value = Number(patch[key]);
+			if (!Number.isFinite(value) || value <= 0) {
+				throw new Error(`${key} 必须是正数`);
+			}
+			result[key] = Math.floor(value);
+		}
+	}
+	return result;
+}
+
 /** 需远程共享的方法 */
 const methods = {
 	autoLaunch,
@@ -135,6 +185,40 @@ const methods = {
 			storeData.render = encryptRenderString(JSON.stringify(storeData.render));
 		}
 		store.store = storeData;
+	},
+	/** 远程 API 运行状态（不含密钥哈希与盐） */
+	remoteApiGetStatus: () => getRemoteApiStatus(),
+	/** 更新远程 API 配置并立即生效 */
+	remoteApiUpdateConfig: async (patch: any) => {
+		updateRemoteApiConfig(sanitizeRemoteApiPatch(patch));
+		await restartRemoteApi();
+		return getRemoteApiStatus();
+	},
+	/** 生成新密钥。明文只在此处返回一次，之后无法再取回 */
+	remoteApiGenerateKey: async () => {
+		const { apiKey } = generateApiKey();
+		await restartRemoteApi();
+		return { apiKey, status: getRemoteApiStatus() };
+	},
+	/** 使用调用方指定的密钥 */
+	remoteApiSetKey: async (plaintext: string) => {
+		if (typeof plaintext !== 'string' || plaintext.trim().length < 16) {
+			throw new Error('密钥长度至少需要 16 个字符');
+		}
+		setApiKey(plaintext.trim());
+		await restartRemoteApi();
+		return getRemoteApiStatus();
+	},
+	remoteApiClearKey: async () => {
+		clearApiKey();
+		await restartRemoteApi();
+		return getRemoteApiStatus();
+	},
+	/** 重新生成自签证书（会让调用方此前固定的指纹失效） */
+	remoteApiRegenerateCert: async () => {
+		await regenerateTlsMaterial();
+		await restartRemoteApi();
+		return getRemoteApiStatus();
 	}
 };
 
@@ -145,6 +229,8 @@ export type RemoteMethods = typeof methods;
  */
 export function remoteRegister(_win: BrowserWindow) {
 	win = _win;
+	// 绑定远程 API 的反向调用通道，并把渲染进程的生命周期事件接进来
+	attachRendererWindow(_win);
 	registerRemoteEvent('electron-store', store);
 	registerRemoteEvent('fs', fs);
 	registerRemoteEvent('os', os);

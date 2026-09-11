@@ -37,6 +37,42 @@ export const OriginalAppStore = {
 		port: 15319,
 		authToken: ''
 	},
+	/**
+	 * 远程 API 配置
+	 *
+	 * 密钥只存 scrypt 哈希，明文不落盘（仅在生成时返回一次给设置页展示）。
+	 * 出于安全考虑默认关闭，且默认只监听回环地址之外的接口需要用户显式开启。
+	 *
+	 * 注意：initStore() 只在版本号升高时才会用 defaultsDeep 补齐缺失键，
+	 * 所以读取时务必用 getRemoteApiConfig() 做防御性合并，不要直接读 store.store.remoteApi。
+	 */
+	remoteApi: {
+		enabled: false,
+		port: 15320,
+		bindAddress: '0.0.0.0',
+		/** 密钥哈希算法标识，便于将来升级 */
+		keyAlgo: 'scrypt',
+		/** scrypt 盐（base64） */
+		keySalt: '',
+		/** scrypt 派生结果（base64，64 字节） */
+		keyHash: '',
+		/** 密钥生成时间，用于设置页展示 */
+		keyCreatedAt: 0,
+		/** 单次启动任务的超时时间（毫秒） */
+		launchTimeoutMs: 10 * 60 * 1000,
+		/** 关闭任务的超时时间（毫秒） */
+		closeTimeoutMs: 30 * 1000,
+		/** 同时进行中的启动任务上限 */
+		maxConcurrentLaunches: 2
+	},
+	/**
+	 * 渲染进程最近一次上报的「正在运行的浏览器 uid」清单。
+	 * 渲染进程重载会清空它自己的 processes 表，而浏览器子进程仍在跑，
+	 * 靠这份持久化记录才能对账出孤儿并如实上报。
+	 */
+	remoteApiRunning: {
+		uids: [] as string[]
+	},
 	/** 渲染进程数据 */
 	render: {} as { [x: string]: any }
 };

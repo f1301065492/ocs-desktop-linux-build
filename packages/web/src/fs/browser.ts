@@ -1,11 +1,11 @@
 import { nextTick } from 'vue';
 import { store } from '../store';
-import { Process, processes } from '../utils/process';
+import { Process, processes, ProcessError } from '../utils/process';
 import { resetSearch } from '../utils/entity';
 import { router } from '../route';
 import { Entity } from './entity';
 import { Folder, root } from './folder';
-import { BrowserOptions, BrowserOperateHistory, Tag, BrowserType, EntityOptions } from './interface';
+import { BrowserOptions, BrowserOperateHistory, Tag, BrowserType, EntityOptions, BrowserRemoteMeta } from './interface';
 import { remote } from '../utils/remote';
 import { RawAutomationScript } from '../components/automation-scripts';
 import { child_process } from '../utils/node';
@@ -19,6 +19,7 @@ export class Browser extends Entity implements BrowserOptions {
 	histories: BrowserOperateHistory[];
 	parent: string;
 	automationScripts: RawAutomationScript[];
+	remoteMeta?: BrowserRemoteMeta;
 
 	constructor(opts: BrowserOptions & EntityOptions) {
 		super(opts);
@@ -31,6 +32,7 @@ export class Browser extends Entity implements BrowserOptions {
 		// 兼容旧字段 playwrightScripts
 		this.automationScripts = opts.automationScripts ?? (opts as any).playwrightScripts ?? [];
 		this.cachePath = opts.cachePath;
+		this.remoteMeta = opts.remoteMeta;
 	}
 
 	/**
@@ -42,18 +44,39 @@ export class Browser extends Entity implements BrowserOptions {
 
 	/** 启动浏览器 */
 	async launch() {
+		/**
+		 * 并发防护：processes 里已有该 uid 的条目说明它正在启动或已在运行。
+		 * 重复 fork 会让两个 Chromium 争用同一个 userDataDir（profile 被锁），
+		 * 且 processes 中会出现两条同 uid 记录，Process.from 只返回第一条，
+		 * 导致 close() 只能关掉其中一个，另一个变成无法回收的孤儿进程。
+		 */
+		if (Process.from(this.uid)) {
+			throw new ProcessError('ALREADY_RUNNING', `浏览器「${this.name}」已在运行或正在启动中`);
+		}
+
 		const process = new Process(this, {
 			executablePath: store.render.setting.launchOptions.executablePath,
 			headless: false
 		});
 		processes.push(process);
-		const reactiveProcess = Process.from(this.uid);
-		if (reactiveProcess) {
-			await reactiveProcess.init(console.log);
-			const code = await reactiveProcess.launch();
-			if (typeof code === 'number') {
-				return code;
+
+		let code: void | number | null | undefined;
+		try {
+			const reactiveProcess = Process.from(this.uid);
+			if (reactiveProcess) {
+				await reactiveProcess.init(console.log);
+				code = await reactiveProcess.launch();
 			}
+		} catch (err) {
+			// 启动失败必须清理进程表，否则会留下一个永远无法再启动的僵尸条目
+			Process.remove(this.uid);
+			throw err;
+		}
+
+		if (typeof code === 'number') {
+			// 子进程已退出，条目同样是垃圾数据，清掉
+			Process.remove(this.uid);
+			return code;
 		}
 
 		this.histories.unshift({ action: '运行', time: Date.now() });

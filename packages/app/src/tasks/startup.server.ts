@@ -126,6 +126,34 @@ async function fetchIcon(iconUrl: string): Promise<{ data: Buffer; contentType: 
 	return FALLBACK_ICON;
 }
 
+/**
+ * 是否放行该来源的跨域请求。
+ *
+ * 原实现是无条件反射请求的 Origin 并带 Allow-Credentials: true，
+ * 等于对任意网站作废了同源策略——用户浏览的任意恶意页面都能用 JS 读走
+ * 解密后的配置、任意本地文件（/api/local-userscript）以及把本机当代理（/proxy）。
+ *
+ * 收紧为本机白名单是安全的，已核实：
+ * - 外部 OCS 用户脚本走的是 GM_xmlhttpRequest（Tampermonkey/ScriptCat 的特权 API），
+ *   本身绕过 CORS，不依赖这里的响应头
+ * - 仓库内对 15319 的访问要么同源（导航页的 fetch），要么是 <img src>（CORS 不适用）
+ */
+function isAllowedOrigin(origin: string | undefined): boolean {
+	if (!origin) {
+		return false;
+	}
+	// Electron 渲染进程加载 file:// 页面时的 Origin 是字符串 "null"
+	if (origin === 'null') {
+		return true;
+	}
+	try {
+		const { hostname } = new URL(origin);
+		return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+	} catch {
+		return false;
+	}
+}
+
 export async function startupServer() {
 	const app = express();
 
@@ -135,12 +163,18 @@ export async function startupServer() {
 	});
 
 	app.use((req, res, next) => {
-		res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'unknown');
-		res.setHeader('Access-Control-Allow-Credentials', 'true');
-		res.setHeader('Access-Control-Allow-Headers', 'Content-Type, request-id, if-none-match');
-		res.setHeader('Access-Control-Allow-Methods', '*');
+		const origin = req.headers.origin;
+		if (isAllowedOrigin(origin)) {
+			res.setHeader('Access-Control-Allow-Origin', origin as string);
+			res.setHeader('Access-Control-Allow-Credentials', 'true');
+			res.setHeader('Access-Control-Allow-Headers', 'Content-Type, request-id, if-none-match, auth-token');
+			res.setHeader('Access-Control-Allow-Methods', '*');
+			// 响应内容随 Origin 变化，必须声明 Vary，否则中间缓存可能把 A 站的响应发给 B 站
+			res.setHeader('Vary', 'Origin');
+		}
 		if (req.method === 'OPTIONS') {
-			res.sendStatus(204);
+			// 非白名单来源直接拒绝预检，这样带自定义头的跨域请求根本发不出去
+			res.sendStatus(isAllowedOrigin(origin) ? 204 : 403);
 			return;
 		}
 		next();
@@ -322,11 +356,20 @@ export async function startupServer() {
 	app.use(express.static(path.join(getProjectPath(), './public')));
 
 	return new Promise<void>((resolve, reject) => {
-		const server = app.listen(store.store.server.port, () => {
+		/**
+		 * 只绑定回环地址。
+		 *
+		 * 之前省略 host 参数会让 Node 绑定到 0.0.0.0/::，即整个局域网可达，
+		 * 而同端口上的 /proxy（开放正向代理/SSRF）、/api/local-userscript（任意本地文件读取）
+		 * 都是无鉴权的，文档也从未声明过这个暴露面。
+		 * 已核实：仓库内调用方与本机启动的浏览器全部走 localhost，收回回环无损。
+		 */
+		const host = '127.0.0.1';
+		const server = app.listen(store.store.server.port, host, () => {
 			const address = server.address();
 			if (address && typeof address === 'object') {
 				// 存储本次服务的端口
-				logger.info(`OCS服务启动成功 => ${address.port}`);
+				logger.info(`OCS服务启动成功 => http://${host}:${address.port}`);
 			}
 			resolve();
 		});

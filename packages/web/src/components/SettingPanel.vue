@@ -132,6 +132,8 @@
 			</Description>
 		</a-card>
 
+		<RemoteApiSetting />
+
 		<a-card title="路径设置">
 			<Path
 				label="浏览器缓存路径"
@@ -172,6 +174,7 @@ import Path from './Path.vue';
 import { lang, store } from '../store';
 import { remote } from '../utils/remote';
 import BrowserPath from './setting/BrowserPath.vue';
+import RemoteApiSetting from './setting/RemoteApiSetting.vue';
 import OCSConfigs from './OCSConfigs.vue';
 import { reactive } from 'vue';
 import { changeTheme } from '../utils';

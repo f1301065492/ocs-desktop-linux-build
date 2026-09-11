@@ -66,6 +66,8 @@ import { electron } from './utils/node';
 import { closeAllBrowser, showClearBrowserCachesModal } from './utils/browser';
 import { about, changeTheme, fetchRemoteNotify, fetchRemoteLangs, setAlwaysOnTop, setAutoLaunch } from './utils';
 import { activeIpcRenderListener } from './utils/ipc';
+import { saveStoreToLocal, saveStoreToLocalSync } from './utils/persist';
+import { startRemoteApiWorker } from './utils/remote.api';
 import { getWindowsRelease } from './utils/os';
 import { currentBrowser } from './fs';
 import { Modal, Message } from '@arco-design/web-vue';
@@ -79,29 +81,12 @@ import Setup from './components/Setup.vue';
 
 const { ipcRenderer } = electron;
 
-/** 异步保存，用于实时持久化（单次 IPC 调用，加密+写入在主进程完成） */
-async function saveStoreToLocal(_store: typeof store) {
-	try {
-		const shouldEncrypt = remote.methods.callSync('isEncryptionAvailable');
-		await remote.methods.call('saveStore', JSON.stringify(_store), shouldEncrypt);
-	} catch (e) {
-		console.error(e);
-	}
-}
-
-/** 同步版本保存，用于关闭时确保数据写入磁盘（单次 IPC 调用） */
-function saveStoreToLocalSync(_store: typeof store) {
-	try {
-		const shouldEncrypt = remote.methods.callSync('isEncryptionAvailable');
-		remote.methods.callSync('saveStore', JSON.stringify(_store), shouldEncrypt);
-	} catch (e) {
-		console.error(e);
-	}
-}
-
 onMounted(async () => {
 	/** 开启 Ipc 通道监听 */
 	activeIpcRenderListener();
+
+	/** 启动远程 API 的 lease worker（长轮询拉取主进程派发的任务） */
+	startRemoteApiWorker();
 
 	/** 设置窗口边框 */
 	remote.os.call('platform').then(async (platform) => {

@@ -33,6 +33,22 @@ export interface BrowserOperateHistory {
 	time: number;
 }
 
+/**
+ * 远程 API 创建的浏览器所携带的元数据。
+ *
+ * 必须作为实体字段持久化（而不是放主进程内存），
+ * 因为远程 API 的任务表不持久化，应用重启后调用方只能靠 clientToken
+ * 在浏览器树里反查自己创建过的实例。这里随浏览器树一起落在加密后的 config.json 中。
+ */
+export interface BrowserRemoteMeta {
+	/** 调用方提供的幂等键 */
+	clientToken?: string;
+	/** 创建来源 */
+	source: 'remote' | 'ui';
+	/** 创建时间 */
+	createdAt: number;
+}
+
 /** 浏览器 */
 export interface BrowserOptions extends EntityOptions {
 	type: BrowserType;
@@ -50,6 +66,8 @@ export interface BrowserOptions extends EntityOptions {
 	histories: BrowserOperateHistory[];
 	/** 自动化程序列表 */
 	automationScripts: RawAutomationScript[];
+	/** 远程 API 元数据，仅远程创建的实例会有 */
+	remoteMeta?: BrowserRemoteMeta;
 }
 
 /**

@@ -10,6 +10,7 @@ import { Folder } from '../fs/folder';
 import { Browser } from '../fs/browser';
 import { Entity } from '../fs/entity';
 import { currentFolder } from '../fs';
+import { Tag, BrowserRemoteMeta } from '../fs/interface';
 import { RawAutomationScript } from '@ocs-desktop/app/lib/src/tasks/remote.register';
 import { resetSearch } from './entity';
 const { shell } = electron;
@@ -70,23 +71,58 @@ export function newFolder() {
 	});
 	currentFolder.value.children[id] = folder;
 }
+/**
+ * 新建浏览器（唯一工厂）。
+ *
+ * 新增的可选参数全部服务于远程 API，不传时行为与改造前完全一致：
+ * - parentUid：目标文件夹。**远程调用必须显式传**，因为缺省值 currentFolder.value
+ *   派生自 store.render.browser.currentFolderUid，那是用户在 UI 里当前选中的文件夹，
+ *   不传就会把浏览器创建到用户碰巧打开的目录里
+ * - uid：指定实体 id（远程 API 需要在创建前就把 uid 传给调用方）
+ * - silent：远程创建时跳过所有 UI 副作用（搜索重置、错误弹窗、进入重命名态）
+ */
 export function newBrowser(opts?: {
-	name: string;
+	name?: string;
 	automationScripts?: RawAutomationScript[];
+	notes?: string;
+	tags?: Tag[];
+	parentUid?: string;
+	uid?: string;
+	remoteMeta?: BrowserRemoteMeta;
+	silent?: boolean;
 	store?: object;
 }): Browser | undefined {
+	const silent = Boolean(opts?.silent);
+
 	if (!store?.render?.setting?.launchOptions?.executablePath) {
-		Message.error('检测到浏览器路径未填写，请在左侧软件设置中设置，然后重新创建浏览器！');
+		if (!silent) {
+			Message.error('检测到浏览器路径未填写，请在左侧软件设置中设置，然后重新创建浏览器！');
+		}
 		return;
 	}
-	// 关闭搜索模式
-	resetSearch();
-	const id = Entity.uuid();
+
+	// 解析目标文件夹。Folder.from 在找不到时会返回 undefined，
+	// 此时退回当前文件夹（保持旧的默认行为）
+	let targetFolder = currentFolder.value;
+	if (opts?.parentUid) {
+		const found = Folder.from(opts.parentUid) as Folder | undefined;
+		if (!found) {
+			return;
+		}
+		targetFolder = found;
+	}
+
+	if (!silent) {
+		// 关闭搜索模式（纯 UI 行为，远程创建不应有副作用）
+		resetSearch();
+	}
+
+	const id = opts?.uid ?? Entity.uuid();
 	const userDataDirsFolder = store.paths.userDataDirsFolder;
 
 	const path_sep = remote.path.get('sep');
 
-	const siblingNames = Object.values(currentFolder.value.children).map((c) => c.name);
+	const siblingNames = Object.values(targetFolder.children).map((c) => c.name);
 	const name = opts?.name
 		? generateUniqueName(opts.name, siblingNames)
 		: generateUniqueName('未命名浏览器', siblingNames);
@@ -97,19 +133,21 @@ export function newBrowser(opts?: {
 		name,
 		checked: false,
 		createTime: Date.now(),
-		notes: '',
-		renaming: true,
-		parent: currentFolder.value.uid,
+		notes: opts?.notes ?? '',
+		// 远程创建不应让实体处在「输入框中」状态，否则该状态会被持久化
+		renaming: !silent,
+		parent: targetFolder.uid,
 		histories: [{ action: '创建', time: Date.now() }],
 		cachePath: inBrowser
 			? ''
 			: userDataDirsFolder.endsWith(path_sep)
 			? userDataDirsFolder + id
 			: userDataDirsFolder + path_sep + id,
-		tags: [],
-		automationScripts: opts?.automationScripts ? JSON.parse(JSON.stringify(opts?.automationScripts)) : []
+		tags: opts?.tags ? JSON.parse(JSON.stringify(opts.tags)) : [],
+		automationScripts: opts?.automationScripts ? JSON.parse(JSON.stringify(opts?.automationScripts)) : [],
+		remoteMeta: opts?.remoteMeta
 	});
-	currentFolder.value.children[id] = browser;
+	targetFolder.children[id] = browser;
 	return browser;
 }
 

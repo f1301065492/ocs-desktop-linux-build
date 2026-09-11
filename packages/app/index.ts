@@ -11,6 +11,8 @@ import { startupServer } from './src/tasks/startup.server';
 import { initChrome } from './src/tasks/init.chrome';
 import { store } from './src/store';
 import { initAesKey } from './src/crypto';
+import { startRemoteApi } from './src/tasks/remote.api';
+import { Logger } from './src/logger';
 
 app.setName('ocs');
 
@@ -42,6 +44,13 @@ function bootstrap() {
 				task('初始化本地设置', async () => {
 					initStore();
 					await task('启动接口服务', () => startupServer());
+					// 远程 API 是可选能力：端口被占用、密钥未配置等都只应记录状态，
+					// 绝不能让它把整个启动流程拖垮（task 会把异常一路抛到 Promise.all）
+					try {
+						await task('启动远程 API', () => startRemoteApi());
+					} catch (err) {
+						Logger('bootstrap').error('远程 API 启动失败：', String(err));
+					}
 				})
 			),
 			task('初始化自动启动', () => autoLaunch()),
