@@ -45,10 +45,12 @@ jobs:
           PLATFORM: linux
           ARCH: x64
 
-      - name: Upload AppImage
+      - name: Upload Linux packages
         uses: actions/upload-artifact@v4
         with:
-          name: ocs-${{ env.VERSION }}-linux-x64-appimage
-          path: packages/app/dist/*.AppImage
+          name: ocs-${{ env.VERSION }}-linux-x64
+          path: |
+            packages/app/dist/*.AppImage
+            packages/app/dist/*.deb
           if-no-files-found: error
           retention-days: 7

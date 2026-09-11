@@ -50,14 +50,31 @@
 		"target": [
 			{
 				"target": "AppImage"
+			},
+			{
+				"target": "deb"
 			}
 		],
+		"category": "Utility",
+		"maintainer": "enncy <enncyemail@qq.com>",
 		"extraResources": [
 			{
 				"from": "../../bin/chrome/linux-${arch}/",
 				"to": "bin/chrome",
 				"filter": ["**/*.zip"]
 			}
+		]
+	},
+	"deb": {
+		"depends": [
+			"libgtk-3-0",
+			"libnotify4",
+			"libnss3",
+			"libxss1",
+			"libxtst6",
+			"xdg-utils",
+			"libatspi2.0-0",
+			"libsecret-1-0"
 		]
 	}
 }
