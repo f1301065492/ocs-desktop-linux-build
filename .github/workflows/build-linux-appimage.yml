@@ -1,0 +1,54 @@
+name: Build Linux AppImage
+
+# 独立于 build.yml：只构建 Linux x64 的 AppImage，用于手动出包。
+# build.yml 的 matrix 会同时构建 win/mac/mac-arm64/linux 四个平台，耗时且没有必要。
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-appimage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.14"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: true
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Set Env
+        run: |
+          VERSION=$(jq -r .version package.json)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "PLATFORM=linux" >> $GITHUB_ENV
+          echo "ARCH=x64" >> $GITHUB_ENV
+
+      - name: Build
+        run: pnpm build
+        env:
+          USE_HARD_LINKS: false
+          PLATFORM: linux
+          ARCH: x64
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocs-${{ env.VERSION }}-linux-x64-appimage
+          path: packages/app/dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
