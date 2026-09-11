@@ -17,6 +17,23 @@ export type RemoteScriptWorker = <W extends keyof ScriptWorker = keyof ScriptWor
 	...args: ScriptWorker[W] extends { (...args: any[]): any } ? Parameters<ScriptWorker[W]> : any[]
 ) => void;
 
+/** 关闭进程的超时时间，超过则认为子进程已失联，主动放弃等待 */
+export const CLOSE_TIMEOUT = 30 * 1000;
+
+/**
+ * 带错误码的进程错误。
+ * 错误码用于跨 IPC 传递后让调用方（尤其是远程 API）能区分失败原因，
+ * 而不是只能拿到一句中文提示。
+ */
+export class ProcessError extends Error {
+	code: string;
+	constructor(code: string, message: string) {
+		super(message);
+		this.name = 'ProcessError';
+		this.code = code;
+	}
+}
+
 /**
  * 运行进程
  */
@@ -129,16 +146,18 @@ export class Process extends EventEmitter {
 
 	async launchPreCheck() {
 		// 检查
+		// 注意：以下失败路径必须 throw 而不是 return，
+		// 否则 launch() 的 then 收到 undefined 后既不 resolve 也不 reject，调用方会永久挂起。
 		if (!this.launchOptions.executablePath) {
 			Message.error('浏览器路径为空，请在软件设置中修改');
-			return;
+			throw new ProcessError('EXECUTABLE_PATH_NOT_SET', '浏览器路径为空，请在软件设置中修改');
 		}
 
 		try {
 			const exists = await remote.fs.call('existsSync', this.launchOptions.executablePath);
 			if (!exists) {
 				Message.error('浏览器路径不存在，请在软件设置中修改');
-				return;
+				throw new ProcessError('EXECUTABLE_PATH_NOT_FOUND', '浏览器路径不存在，请在软件设置中修改');
 			}
 
 			// 脚本检查
@@ -184,7 +203,12 @@ export class Process extends EventEmitter {
 			});
 			return { scriptsToInstall, enabledScriptCount: enabledUserScripts.length };
 		} catch (err) {
+			// 上面主动抛出的 ProcessError 原样透传，其余异常包装后抛出
+			if (err instanceof ProcessError) {
+				throw err;
+			}
 			Message.error('浏览器路径读取错误 : ' + String(err));
+			throw new ProcessError('PRECHECK_FAILED', '浏览器路径读取错误 : ' + String(err));
 		}
 	}
 
@@ -194,27 +218,32 @@ export class Process extends EventEmitter {
 			this.status = 'launching';
 			this.launchPreCheck()
 				.then((result) => {
-					if (result) {
-						this.once('launched', () => {
-							resolve();
-						});
-						this.shell?.once('exit', (code) => {
-							resolve(code);
-						});
-						this.worker?.('launch', {
-							userDataDir: this.browser.cachePath,
-							// 这里要加密编码，防止路径中有中文等特殊字符，会无法安装脚本
-							enabledScriptCount: result.enabledScriptCount,
-							userscripts: result.scriptsToInstall.map((item) =>
-								item.script.isLocalScript
-									? `http://localhost:${store.server.port}/api/local-userscript?path=${encodeURIComponent(
-											item.script.info?.code_url || item.script.url
-									  )}`
-									: item.script.info?.code_url || item.script.url
-							),
-							...this.launchOptions
-						});
+					// 兜底：launchPreCheck 的契约是「成功返回结果，失败抛异常并已被 catch 处理」。
+					// 这里再挡一道，避免契约被破坏后调用方静默挂起。
+					if (!result) {
+						this.status = 'closed';
+						reject(new ProcessError('PRECHECK_FAILED', '启动前置检查未返回结果'));
+						return;
 					}
+					this.once('launched', () => {
+						resolve();
+					});
+					this.shell?.once('exit', (code) => {
+						resolve(code);
+					});
+					this.worker?.('launch', {
+						userDataDir: this.browser.cachePath,
+						// 这里要加密编码，防止路径中有中文等特殊字符，会无法安装脚本
+						enabledScriptCount: result.enabledScriptCount,
+						userscripts: result.scriptsToInstall.map((item) =>
+							item.script.isLocalScript
+								? `http://localhost:${store.server.port}/api/local-userscript?path=${encodeURIComponent(
+										item.script.info?.code_url || item.script.url
+								  )}`
+								: item.script.info?.code_url || item.script.url
+						),
+						...this.launchOptions
+					});
 				})
 				.catch(reject);
 		});
@@ -225,7 +254,23 @@ export class Process extends EventEmitter {
 		// 标记为 closing ，使监控页面，以及操作栏的图标可以判断状态
 		this.status = 'closing';
 		return new Promise<void>((resolve) => {
-			this.once('browser-closed', resolve);
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolve();
+			};
+			/**
+			 * 超时兜底：createRemoteScriptWorker 在 shell.connected 为 false 时
+			 * 不会真正发出消息，此时 browser-closed 永远不会到达，close() 会永久挂起。
+			 * 超时后主动把进程从表中摘除以避免僵尸条目。
+			 */
+			const timer = setTimeout(() => {
+				Process.remove(this.uid);
+				finish();
+			}, CLOSE_TIMEOUT);
+			this.once('browser-closed', finish);
 			// 关闭进程
 			this.worker?.('close');
 		});

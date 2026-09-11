@@ -229,14 +229,21 @@ async function launchAll() {
 				if (type.value === '延时启动') {
 					for (const browser of browsers) {
 						if (canRun()) {
-							browser.launch();
+							// 不等待结果，但必须吞掉 rejection：
+							// launch() 现在会因前置检查失败而 reject，不处理会产生未捕获的 rejection
+							browser.launch().catch((err) => {
+								console.error('启动失败：', browser.name, err);
+							});
 							await new Promise((resolve) => setTimeout(resolve, time.value * 1000));
 						}
 					}
 				} else {
 					for (const browser of browsers) {
 						if (canRun()) {
-							await browser.launch();
+							// 单个浏览器启动失败不应中断整批操作，逐个吞掉异常后继续
+							await browser.launch().catch((err) => {
+								console.error('启动失败：', browser.name, err);
+							});
 						}
 					}
 				}
@@ -337,9 +344,16 @@ async function multipleOperationRegister(name: string, runner: (canRun: () => bo
 			modal.close();
 		}
 	});
-	await runner(() => canRun);
-	canRun = false;
-	modal.close();
+	// runner 内部现在可能抛出（例如 launch() 的前置检查失败），
+	// 必须捕获并保证 modal 一定关闭，否则 loading 弹窗会永久卡住
+	try {
+		await runner(() => canRun);
+	} catch (err) {
+		Message.error('批量化操作失败：' + String(err instanceof Error ? err.message : err));
+	} finally {
+		canRun = false;
+		modal.close();
+	}
 }
 </script>
 

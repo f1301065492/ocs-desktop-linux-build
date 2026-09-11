@@ -18,7 +18,7 @@
 				<a-button
 					size="mini"
 					type="text"
-					@click.stop="instance?.launch()"
+					@click.stop="safeLaunch"
 				>
 					<Icon
 						type="play_circle"
@@ -55,7 +55,7 @@
 				<a-button
 					type="text"
 					size="mini"
-					@click.stop="instance?.relaunch()"
+					@click.stop="safeRelaunch"
 				>
 					<Icon
 						type="sync"
@@ -118,6 +118,22 @@ const props = withDefaults(
 );
 const instance = Browser.from(props.browser.uid);
 const process = computed(() => Process.from(props.browser.uid));
+
+/**
+ * launch() / relaunch() 会因为前置检查失败（如浏览器路径未配置）而 reject。
+ * 模板里的 @click 直接调用会把 rejection 变成未捕获异常，这里统一兜底。
+ */
+function safeLaunch() {
+	instance?.launch()?.catch((err) => {
+		console.error('启动失败：', err);
+	});
+}
+
+function safeRelaunch() {
+	instance?.relaunch()?.catch((err) => {
+		console.error('重启失败：', err);
+	});
+}
 </script>
 
 <style scoped lang="less">
