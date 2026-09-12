@@ -57,6 +57,7 @@
 		],
 		"category": "Utility",
 		"maintainer": "enncy <enncyemail@qq.com>",
+		"executableArgs": ["--no-sandbox"],
 		"extraResources": [
 			{
 				"from": "../../bin/chrome/linux-${arch}/",
