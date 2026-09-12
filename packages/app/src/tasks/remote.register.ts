@@ -109,6 +109,14 @@ export function getMainWindow(): BrowserWindow | undefined {
 
 const REMOTE_API_BIND_ADDRESSES = ['0.0.0.0', '127.0.0.1'];
 
+/**
+ * 只有主进程会写入的 store 顶层键。
+ *
+ * 渲染进程在启动时读到的是快照，并在每次保存时把整个 store 回传，
+ * 所以这些键必须在 saveStore 里被保护，否则运行期由主进程写入的值会被快照覆盖。
+ */
+const MAIN_PROCESS_OWNED_KEYS = ['remoteApi', 'remoteApiRunning'] as const;
+
 /** 白名单式地构造远程 API 配置补丁，绝不让渲染进程直接写 keyHash / keySalt 等字段 */
 function sanitizeRemoteApiPatch(patch: any): Record<string, unknown> {
 	const result: Record<string, unknown> = {};
@@ -184,6 +192,25 @@ const methods = {
 			// @ts-ignore
 			storeData.render = encryptRenderString(JSON.stringify(storeData.render));
 		}
+
+		/**
+		 * 保留主进程独占的键。
+		 *
+		 * 渲染进程的 store 是应用启动时从主进程读的一份**快照**，它并不拥有这些键，
+		 * 但 saveStore 是整体替换 store.store 的——若不在这里拦一道，
+		 * 用户在设置页开启远程 API 后（值只写进了主进程），
+		 * 下一次渲染进程保存就会用陈旧快照把它连同密钥一起覆盖掉。
+		 * 表现为：开启后第一次调用正常，之后一律 404 NOT_ENABLED 且密钥凭空消失。
+		 */
+		for (const key of MAIN_PROCESS_OWNED_KEYS) {
+			const authoritative = (store.store as Record<string, unknown>)[key];
+			if (authoritative === undefined) {
+				delete (storeData as Record<string, unknown>)[key];
+			} else {
+				(storeData as Record<string, unknown>)[key] = authoritative;
+			}
+		}
+
 		store.store = storeData;
 	},
 	/** 远程 API 运行状态（不含密钥哈希与盐） */
