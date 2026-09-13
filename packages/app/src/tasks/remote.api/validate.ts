@@ -220,6 +220,18 @@ export function parseCreateBrowserInput(body: unknown): CreateBrowserInput {
 	return result;
 }
 
+/** 解析截图质量参数（仅 jpeg 有效），默认 70 */
+export function parseQuality(raw: unknown): number {
+	if (raw === undefined) {
+		return 70;
+	}
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value < 0 || value > 100) {
+		throw new ApiError('INVALID_ARGUMENT', 'quality 必须是 0-100 之间的数字');
+	}
+	return Math.round(value);
+}
+
 /** 解析 ?wait= 长轮询秒数，上限 60 秒 */
 export function parseWaitSeconds(raw: unknown): number {
 	if (raw === undefined) {

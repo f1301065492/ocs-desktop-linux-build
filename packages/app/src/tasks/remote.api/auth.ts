@@ -34,7 +34,13 @@ function recordAuthFailure(req: Request): void {
 	failures.set(clientIp(req), list);
 }
 
-/** 从 X-API-Key 或 Authorization: Bearer 中取出密钥 */
+/**
+ * 取出请求携带的 API 密钥，依次尝试 X-API-Key 头、Authorization: Bearer、?apiKey= 查询参数。
+ *
+ * 支持查询参数是为了 SSE：浏览器的 EventSource 无法自定义请求头，
+ * 只给头的话浏览器端根本用不了事件流。
+ * 访问日志用的是 req.path 而非 req.url，查询串不会被记录下来。
+ */
 function extractKey(req: Request): string | undefined {
 	const direct = req.get('x-api-key');
 	if (direct && direct.trim()) {
@@ -46,6 +52,10 @@ function extractKey(req: Request): string | undefined {
 		if (match) {
 			return match[1].trim();
 		}
+	}
+	const fromQuery = req.query?.apiKey;
+	if (typeof fromQuery === 'string' && fromQuery.trim()) {
+		return fromQuery.trim();
 	}
 	return undefined;
 }

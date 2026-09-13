@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { Logger } from '../../logger';
 import { getRemoteApiConfig } from './config';
 import { invokeRenderer, BridgeTimeoutError, BridgeUnavailableError } from './bridge';
+import { broadcast } from './events';
 
 const logger = Logger('remote-api');
 
@@ -132,10 +133,24 @@ export function createTask(kind: TaskKind, uid: string, clientToken?: string): R
 	return task;
 }
 
+/** 把任务的当前状态推给所有 SSE 客户端 */
+function broadcastTask(task: RemoteTask): void {
+	broadcast('task', {
+		taskId: task.taskId,
+		kind: task.kind,
+		uid: task.uid,
+		state: task.state,
+		phase: task.phase,
+		message: task.message,
+		error: task.error
+	});
+}
+
 async function execute(task: RemoteTask): Promise<void> {
 	task.state = 'running';
 	task.startedAt = Date.now();
 	task.phase = task.kind === 'launch' ? 'precheck' : 'closing';
+	broadcastTask(task);
 
 	const config = getRemoteApiConfig();
 	const timeoutMs = task.kind === 'launch' ? config.launchTimeoutMs : config.closeTimeoutMs;
@@ -177,6 +192,8 @@ async function execute(task: RemoteTask): Promise<void> {
 	} finally {
 		task.finishedAt = Date.now();
 		inflightByUid.delete(task.uid);
+		// 终态统一广播，覆盖 succeeded / failed / timeout / unknown 所有分支
+		broadcastTask(task);
 		pump();
 	}
 }
@@ -199,6 +216,8 @@ export function setTaskProgress(taskId: string, phase: string, message?: string)
 	if (message) {
 		task.message = message;
 	}
+	// 让盯着事件流的调用方也能看到阶段推进，而不是只能轮询
+	broadcastTask(task);
 }
 
 /**

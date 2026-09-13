@@ -24,6 +24,11 @@ export type ApiErrorCode =
 	| 'RENDERER_UNAVAILABLE'
 	| 'LAUNCH_TIMEOUT'
 	| 'CLOSE_TIMEOUT'
+	// 以下来自子进程（ScriptWorker）截图/页面查询链路
+	| 'PAGE_NOT_FOUND'
+	| 'NO_PAGE'
+	| 'WORKER_TIMEOUT'
+	| 'WORKER_ERROR'
 	| 'INTERNAL';
 
 const HTTP_STATUS: Record<ApiErrorCode, number> = {
@@ -45,6 +50,12 @@ const HTTP_STATUS: Record<ApiErrorCode, number> = {
 	RENDERER_UNAVAILABLE: 503,
 	LAUNCH_TIMEOUT: 504,
 	CLOSE_TIMEOUT: 504,
+	// 没有匹配的页面是「找不到资源」，用 404；
+	// 浏览器一个页面都没有属于状态冲突，用 409 更准确
+	PAGE_NOT_FOUND: 404,
+	NO_PAGE: 409,
+	WORKER_TIMEOUT: 504,
+	WORKER_ERROR: 500,
 	INTERNAL: 500
 };
 

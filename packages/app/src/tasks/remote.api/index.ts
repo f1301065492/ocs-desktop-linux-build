@@ -6,7 +6,7 @@ import { Logger } from '../../logger';
 import { getRemoteApiConfig, getRemoteApiPublicConfig } from './config';
 import { ApiError, fail, ok, toApiError } from './errors';
 import { requireApiKey } from './auth';
-import { parseCreateBrowserInput, parseUid, parseClientTokenFilter, parseWaitSeconds } from './validate';
+import { parseCreateBrowserInput, parseUid, parseClientTokenFilter, parseWaitSeconds, parseQuality } from './validate';
 import { createTask, getInflightTaskId, getTask, setTaskProgress, waitForTask } from './tasks';
 import {
 	attachRendererWindow,
@@ -15,11 +15,13 @@ import {
 	setProgressReporter,
 	setRunningStateSyncer,
 	BridgeTimeoutError,
-	BridgeUnavailableError
+	BridgeUnavailableError,
+	RunningSnapshotItem
 } from './bridge';
 import { store } from '../../store';
 import { AutomationScripts } from '../../scripts';
 import { ensureTlsMaterial, listLocalAddresses } from './tls';
+import { addClient, removeClient, broadcast, closeAllClients } from './events';
 
 const logger = Logger('remote-api');
 
@@ -275,6 +277,88 @@ function createApp(): express.Express {
 		})
 	);
 
+	/** 列出某个浏览器当前打开的所有标签页，便于调用方决定截哪一页 */
+	api.get(
+		'/browsers/:uid/pages',
+		asyncRoute(async (req, res) => {
+			ensureRenderer();
+			const uid = parseUid(req.params.uid);
+			await getBrowserOrThrow(uid);
+			try {
+				const result = await invokeRenderer('browser.pages', { uid }, { timeoutMs: FAST_OP_TIMEOUT });
+				res.json(ok(result, requestIdOf(req)));
+			} catch (err) {
+				throw translateRendererError(err);
+			}
+		})
+	);
+
+	/**
+	 * 截取页面画面。
+	 *
+	 * 成功时返回**图片二进制**而不是 JSON 信封——这样才能直接丢进 <img src> 或
+	 * 保存成文件用图片查看器打开。失败时仍返回标准的 JSON 错误体。
+	 */
+	api.get(
+		'/browsers/:uid/screenshot',
+		asyncRoute(async (req, res) => {
+			ensureRenderer();
+			const uid = parseUid(req.params.uid);
+			await getBrowserOrThrow(uid);
+
+			const format = req.query.format === 'png' ? 'png' : 'jpeg';
+			const quality = parseQuality(req.query.quality);
+			const pageUrl = typeof req.query.page === 'string' && req.query.page ? req.query.page : undefined;
+			const fullPage = String(req.query.fullPage ?? '').toLowerCase() === 'true';
+
+			let shot: { base64: string; mimeType: string; size: number; url: string; title: string };
+			try {
+				shot = await invokeRenderer(
+					'browser.screenshot',
+					{ uid, pageUrl, format, quality, fullPage },
+					{ timeoutMs: FAST_OP_TIMEOUT }
+				);
+			} catch (err) {
+				throw translateRendererError(err);
+			}
+
+			res.setHeader('Content-Type', shot.mimeType);
+			res.setHeader('Content-Length', String(shot.size));
+			// 把画面来源一并回传，调用方据此确认截到的是哪个标签页
+			// （标题可能是中文，必须编码后放进 header）
+			res.setHeader('X-Page-Url', encodeURIComponent(shot.url));
+			res.setHeader('X-Page-Title', encodeURIComponent(shot.title));
+			// 画面是瞬时的，别让中间层缓存
+			res.setHeader('Cache-Control', 'no-store');
+			res.send(Buffer.from(shot.base64, 'base64'));
+		})
+	);
+
+	/**
+	 * SSE 事件流：浏览器状态变化与任务状态变化会实时推送。
+	 *
+	 * 鉴权支持 ?apiKey=，因为浏览器的 EventSource 无法自定义请求头。
+	 */
+	api.get(
+		'/events',
+		asyncRoute(async (req, res) => {
+			// 立刻冲刷响应头，否则调用方要等到第一条业务数据才知道连接已经建立
+			res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+			res.setHeader('Cache-Control', 'no-cache, no-transform');
+			res.setHeader('Connection', 'keep-alive');
+			// 反向代理默认会缓冲响应，那样 SSE 就失去实时性了
+			res.setHeader('X-Accel-Buffering', 'no');
+			res.flushHeaders?.();
+
+			res.write(`event: ready\ndata: ${JSON.stringify({ requestId: requestIdOf(req) })}\n\n`);
+			addClient(res);
+
+			req.on('close', () => {
+				removeClient(res);
+			});
+		})
+	);
+
 	expressApp.use('/api/v1', api);
 
 	// 6. 未匹配的任何路径
@@ -299,19 +383,42 @@ function createApp(): express.Express {
 	return expressApp;
 }
 
+/** 上一次广播出去的状态，用于只推真正变化的条目，避免每次上报都刷全量 */
+const lastStatusByUid = new Map<string, string>();
+
 /**
- * 渲染进程上报运行清单时的对账。
+ * 渲染进程上报运行清单时的对账与广播。
  *
  * 渲染进程重载会清空它的 processes 表，但 child_process.fork 出来的浏览器子进程
  * 仍在运行。只有靠主进程这份持久化记录才能发现它们已经失去句柄，
  * 从而如实报 orphaned —— 谎报 closed 会让调用方误以为可以重新启动，
  * 而实际上 Chromium 的 profile 锁会让新实例起不来。
  */
-function syncRunningState(uids: string[]): { orphans: string[] } {
+function syncRunningState(snapshot: RunningSnapshotItem[], freshSession: boolean): { orphans: string[] } {
 	const previous = store.store.remoteApiRunning?.uids ?? [];
-	const current = new Set(uids);
-	const orphans = previous.filter((uid) => !current.has(uid));
-	store.set('remoteApiRunning', { uids });
+	const currentUids = snapshot.map((item) => item.uid);
+	const currentSet = new Set(currentUids);
+	const orphans = previous.filter((uid) => !currentSet.has(uid));
+	store.set('remoteApiRunning', { uids: currentUids });
+
+	// 新出现或状态发生变化的
+	for (const { uid, status } of snapshot) {
+		if (lastStatusByUid.get(uid) !== status) {
+			lastStatusByUid.set(uid, status);
+			broadcast('status', { uid, status });
+		}
+	}
+
+	// 从上报里消失的：渲染进程刚重建视图时意味着失去句柄的孤儿，
+	// 常规上报里则只是被正常关闭了
+	for (const uid of previous) {
+		if (currentSet.has(uid)) {
+			continue;
+		}
+		lastStatusByUid.delete(uid);
+		broadcast('status', { uid, status: freshSession ? 'orphaned' : 'closed' });
+	}
+
 	return { orphans };
 }
 
@@ -396,6 +503,8 @@ export async function stopRemoteApi(): Promise<void> {
 	}
 	server = null;
 	listening = false;
+	// SSE 是长连接，不主动断开的话 close() 会一直等它们
+	closeAllClients();
 	await new Promise<void>((resolve) => {
 		instance.close(() => resolve());
 		// 已建立的 keep-alive 连接会一直拖住 close()，必须主动断开，

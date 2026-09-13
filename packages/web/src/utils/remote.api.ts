@@ -30,6 +30,8 @@ const CH_SYNC_RUNNING = 'ocs-remote-api:sync-running';
 
 /** 被判定为孤儿（主进程记录在跑，但渲染进程已失去句柄）的 uid */
 let orphanedUids = new Set<string>();
+/** 本次会话是否已完成孤儿对账（只在启动后的第一次上报做） */
+let reconciledThisSession = false;
 let started = false;
 
 function sleep(ms: number) {
@@ -275,12 +277,102 @@ async function handleClose(payload: { taskId?: string; uid: string }) {
 	return { uid: payload.uid, status: 'closed' };
 }
 
+/** 子进程截图/查询页面的超时。截图本身很快，慢的通常是页面正在导航 */
+const WORKER_OP_TIMEOUT = 15 * 1000;
+
+/**
+ * 调用子进程（ScriptWorker）并等待它通过事件回传结果。
+ *
+ * 父子进程之间的 IPC 是**单向**的：父进程的 shell.send 没有回执，
+ * 只能"先挂监听再发指令"。这是项目里既有的范式（dashboard 里的 webrtc-page-loaded 就是这么写的）。
+ *
+ * requestId 用来在并发请求间区分回执归属——不带它的话，两个同时进行的截图请求
+ * 会各自拿到对方的画面（A 请求先发出，B 请求后发出，B 的结果先回来时 A 会误收）。
+ */
+function invokeWorker<T>(
+	process: Process,
+	method: 'screenshotPage' | 'listPages',
+	resultEvent: 'screenshot-result' | 'pages-result',
+	payload: Record<string, unknown>,
+	timeoutMs: number
+): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		// 不需要密码学强度，只要在同一会话内不撞即可
+		const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		let settled = false;
+
+		const cleanup = () => {
+			clearTimeout(timer);
+			process.removeListener(resultEvent, onResult);
+		};
+
+		const onResult = (result: { requestId?: string; data?: unknown; error?: { code?: string; message?: string } }) => {
+			// 不是本次请求的回执（并发的另一个请求发来的），忽略
+			if (!result || result.requestId !== requestId) {
+				return;
+			}
+			settled = true;
+			cleanup();
+			if (result.error) {
+				reject(apiError(result.error.code || 'WORKER_ERROR', result.error.message || '子进程执行失败'));
+			} else {
+				resolve(result.data as T);
+			}
+		};
+
+		const timer = setTimeout(() => {
+			if (settled) return;
+			cleanup();
+			reject(apiError('WORKER_TIMEOUT', '子进程响应超时，浏览器可能正在忙或已被关闭'));
+		}, timeoutMs);
+
+		process.on(resultEvent, onResult);
+		// worker 的签名是 <W extends keyof ScriptWorker>，方法名在这里是动态的，放宽一下类型
+		(process.worker as ((event: string, ...args: any[]) => void) | undefined)?.(method, { requestId, ...payload });
+	});
+}
+
+async function handleScreenshot(payload: {
+	uid: string;
+	pageUrl?: string;
+	format?: 'png' | 'jpeg';
+	quality?: number;
+	fullPage?: boolean;
+}) {
+	const process = Process.from(payload.uid);
+	if (!process) {
+		throw apiError('NOT_RUNNING', `浏览器 ${payload.uid} 当前未在运行，无法截图`);
+	}
+	return invokeWorker(
+		process,
+		'screenshotPage',
+		'screenshot-result',
+		{
+			pageUrl: payload.pageUrl,
+			format: payload.format,
+			quality: payload.quality,
+			fullPage: payload.fullPage
+		},
+		WORKER_OP_TIMEOUT
+	);
+}
+
+async function handlePages(payload: { uid: string }) {
+	const process = Process.from(payload.uid);
+	if (!process) {
+		throw apiError('NOT_RUNNING', `浏览器 ${payload.uid} 当前未在运行`);
+	}
+	return invokeWorker(process, 'listPages', 'pages-result', {}, WORKER_OP_TIMEOUT);
+}
+
 const handlers: Record<string, (payload: any) => Promise<unknown>> = {
 	'browser.list': handleList,
 	'browser.get': handleGet,
 	'browser.create': handleCreate,
 	'browser.launch': handleLaunch,
-	'browser.close': handleClose
+	'browser.close': handleClose,
+	'browser.screenshot': handleScreenshot,
+	'browser.pages': handlePages
 };
 
 async function dispatch(method: string, payload: unknown): Promise<unknown> {
@@ -291,16 +383,36 @@ async function dispatch(method: string, payload: unknown): Promise<unknown> {
 	return handler(payload ?? {});
 }
 
-/** 主进程记录「哪些 uid 在跑」，渲染进程重载后才能对账出孤儿 */
+/**
+ * 上报当前运行中的浏览器及其状态。
+ *
+ * 主进程据此做两件事：持久化运行清单（供渲染进程重载后对账出孤儿），
+ * 以及对比状态快照、只对真正变化的 uid 广播 SSE 事件。
+ */
 async function syncRunningState() {
 	try {
-		const uids = processes.filter((process) => process.status !== 'closed').map((process) => process.uid);
-		const result = await ipcRenderer.invoke(CH_SYNC_RUNNING, uids);
-		if (result && Array.isArray(result.orphans)) {
+		const snapshot = processes
+			.filter((process) => process.status !== 'closed')
+			.map((process) => ({ uid: process.uid, status: process.status as string }));
+
+		/**
+		 * 只有本次会话的第一次上报才算「重建视图」：此刻渲染进程的 processes 表是空的，
+		 * 主进程记录里那些 uid 才意味着「失去句柄的孤儿」。
+		 *
+		 * 之后的常规上报里某个 uid 消失只代表它被正常关闭了——如果一并当孤儿处理，
+		 * 关闭一个浏览器会让它的状态一直错误地显示成 orphaned。
+		 */
+		const freshSession = !reconciledThisSession;
+		const result = await ipcRenderer.invoke(CH_SYNC_RUNNING, { snapshot, freshSession });
+		reconciledThisSession = true;
+
+		if (freshSession && result && Array.isArray(result.orphans)) {
 			orphanedUids = new Set<string>(result.orphans);
 		}
-	} catch {
-		// 主进程尚未注册 handler（启动早期）或通道异常，下次同步会重试
+	} catch (err) {
+		// 主进程尚未注册 handler（启动早期）或通道异常，下次同步会重试。
+		// 这个异常不能静默吞掉：通道一旦持续失败，状态推送就完全失效，而表面看不出任何异常
+		console.error('上报运行状态失败：', err);
 	}
 }
 
@@ -346,12 +458,21 @@ export function startRemoteApiWorker(): void {
 	// syncRunningState 与 leaseLoop 内部都自带 try/catch，
 	// 这里再挂一层 catch 只是为了不让任何漏网的 rejection 变成未捕获异常
 	syncRunningState().catch(console.error);
+	/**
+	 * 取值函数必须同时读 uid 和 status。
+	 *
+	 * Browser.launch() 是先 processes.push(process) 再调 process.launch()，
+	 * push 那一刻 status 还是初始的 'closed'（会被快照过滤掉）。
+	 * 如果这里只读 uid，后续 status 从 closed → launching → launched 的变化
+	 * 就不会触发 watch，状态推送会一直是空的——而表面上什么都看不出。
+	 *
+	 * 拼成字符串是为了让 watch 按值比较，省掉 deep 遍历的开销。
+	 */
 	watch(
-		() => processes.map((process) => process.uid),
+		() => processes.map((process) => `${process.uid}:${process.status}`).join('|'),
 		() => {
 			syncRunningState().catch(console.error);
-		},
-		{ deep: true }
+		}
 	);
 
 	for (let i = 0; i < LEASE_SLOTS; i++) {

@@ -137,11 +137,21 @@ export function setProgressReporter(reporter: ProgressReporter): void {
 	progressReporter = reporter;
 }
 
+/** 渲染进程上报的单个浏览器运行状态 */
+export interface RunningSnapshotItem {
+	uid: string;
+	status: string;
+}
+
 /**
- * 渲染进程上报「当前有哪些 uid 在跑」时的对账回调。
- * 返回主进程判定出的孤儿 uid：曾经记录在跑、但渲染进程现在已经没有句柄的实例。
+ * 渲染进程上报「当前有哪些 uid 在跑、各是什么状态」时的处理回调。
+ *
+ * @param freshSession 是否是渲染进程本次会话的第一次上报。
+ *   只有这一次才应该把「记录里在跑、但上报中不存在」的 uid 判为孤儿；
+ *   常规上报里 uid 消失只代表它被正常关闭了。
+ * @returns 孤儿 uid 列表（仅在 freshSession 时有意义）
  */
-export type RunningStateSyncer = (uids: string[]) => { orphans: string[] };
+export type RunningStateSyncer = (snapshot: RunningSnapshotItem[], freshSession: boolean) => { orphans: string[] };
 let runningStateSyncer: RunningStateSyncer | null = null;
 
 export function setRunningStateSyncer(syncer: RunningStateSyncer): void {
@@ -282,13 +292,18 @@ function registerIpcHandlers(): void {
 		progressReporter(taskId, String(payload?.phase ?? ''), payload?.message);
 	});
 
-	ipcMain.handle('ocs-remote-api:sync-running', async (event, uids: unknown) => {
+	ipcMain.handle('ocs-remote-api:sync-running', async (event, payload: any) => {
 		assertSender(event);
-		const list = Array.isArray(uids) ? uids.filter((uid): uid is string => typeof uid === 'string') : [];
+		const raw = payload && Array.isArray(payload.snapshot) ? payload.snapshot : [];
+		const snapshot = raw
+			.filter((item: any) => item && typeof item.uid === 'string')
+			.map((item: any) => ({ uid: item.uid as string, status: String(item.status ?? 'closed') }));
+		const freshSession = Boolean(payload && payload.freshSession);
+		logger.debug(`收到运行状态上报：${snapshot.length} 项，freshSession=${freshSession}`);
 		if (!runningStateSyncer) {
 			return { orphans: [] };
 		}
-		return runningStateSyncer(list);
+		return runningStateSyncer(snapshot, freshSession);
 	});
 }
 
