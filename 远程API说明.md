@@ -624,8 +624,20 @@ for (;;) {
 
 ## 六、跨网络访问：推荐用 SSH 隧道
 
-远程 API 的设计前提是**仅限可信内网**。如果需要从外网访问，
-**推荐 SSH 隧道而不是反向代理**——不开任何公网端口，应用甚至不必对局域网监听。
+远程 API 的设计前提是**仅限可信内网**。跨网络访问时
+**推荐 SSH 隧道而不是反向代理**——不开任何公网端口，应用也不必对局域网监听。
+
+### 先判断方向
+
+这一步搞错的话后面全白做：
+
+| 情况 | 用哪种 | 在哪台机器上执行 |
+| --- | --- | --- |
+| 访问方能被直连（同内网 / OCS 机器有公网 IP） | **正向** `-L` | 在**访问方**上执行 |
+| **OCS 机器没有公网 IP，另有一台公网 VPS 做调用方** | **反向** `-R` | 在 **OCS 机器**上执行 |
+
+关键点：**只要让 OCS 机器主动往外连，它自己就不需要公网 IP。**
+没有公网 IP 挡住的只是「从外网主动连进来」这一种方式。
 
 ### 为什么不推荐反代
 
@@ -633,75 +645,168 @@ for (;;) {
 | --- | --- |
 | SSE 被缓冲 | Nginx 默认缓冲响应，事件流会失去实时性，要额外配 `proxy_buffering off` |
 | 长连接被切断 | `proxy_read_timeout` 默认 60 秒，会切断空闲的 SSE 和 `?wait=60` 长轮询 |
-| **限流退化成全局限流** | 服务端刻意不信任 `X-Forwarded-For`（防伪造），经反代后所有客户端都是同一个 IP，**任何一个人失败 20 次就会把所有人挡住** |
+| **限流退化成全局限流** | 服务端刻意不信任 `X-Forwarded-For`（防伪造），经反代后所有客户端在服务端看来是同一个 IP，**任何一个人鉴权失败 20 次就会把所有人挂在 429 后面** |
 | 密钥进日志 | 若用 `?apiKey=`，密钥会出现在 Nginx 默认的 access.log（`$request` 含查询串） |
 | 攻击面 | 会把「能在该机器上拉起浏览器进程」的能力暴露到公网 |
 
-SSH 隧道没有以上任何一个问题：它是裸 TCP 转发，不缓冲、不超时、不记日志、不开公网端口。
+SSH 隧道没有以上任何一个问题：裸 TCP 转发，不缓冲、不超时、不记日志、不开公网端口。
 
-### 步骤
+---
 
-**1. 把监听地址改成 `127.0.0.1`**
+### 反向隧道（OCS 机器没有公网 IP）
 
-设置页 →「监听地址」选 `127.0.0.1`。改完后 `https://192.168.1.30:15320`
-会**不再可达**——这正是目的，隧道的服务端也是连本机的 127.0.0.1。
-
-**2. 在需要访问的机器上建隧道**
-
-```bash
-# -N 不执行远程命令；加 keepalive 防止空闲被断开
-ssh -N -L 15320:127.0.0.1:15320 \
-    -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-    hanser@192.168.1.30
+```
+[外网调用方]  →  [VPS / 公网 IP]  ←── SSH 反向隧道 ───  [OCS 机器 / 内网]
+                        ↑
+                 在 OCS 机器上主动发起
 ```
 
-放在后台：命令末尾加 `&`，或 ssh 加 `-f`。
+**1. 把 OCS 的监听地址改成 `127.0.0.1`**
 
-**3. 通过 localhost 访问**
+设置页 →「监听地址」选 `127.0.0.1`。改完后局域网地址会**不再可达**——这正是目的。
+
+**2. 在 OCS 机器上建隧道**
+
+```bash
+ssh -N -R 15320:127.0.0.1:15320 \
+    -p <SSH端口> \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    <用户名>@<VPS公网IP>
+```
+
+> ⚠️ **SSH 端口未必是 22。** 很多服务器（尤其装了面板的）会改到非标准端口。
+> 报错 `Connection refused` 说明包到达了主机但被拒绝（sshd 没监听或主机防火墙 REJECT），
+> 而 `Connection timed out` 通常是云安全组在 DROP——两者含义不同，别混为一谈。
+
+**`-R` 默认只绑 VPS 的回环地址**，这正好是我们要的效果：
+
+- VPS 上的程序可以访问
+- **公网任何人都访问不到**，不需要额外配防火墙
+- **不用改 VPS 的 `sshd_config`**（有些教程让你开 `GatewayPorts`，那是给"要让第三方机器访问"的场景用的，这里不需要，开了反而危险）
+
+**3. 在 VPS 上访问**
 
 ```bash
 curl -k -H "X-API-Key: $KEY" https://localhost:15320/api/v1/health
 ```
 
 > ⚠️ **必须用 `localhost`，不能写 `127.0.0.1`。**
-> 自签证书的 SAN 里只有 `localhost` 和各网卡的局域网 IP，
-> 而 `127.0.0.1` 因为是回环地址被排除了。写成 `127.0.0.1` 会主机名校验失败，
-> 即使把证书导入信任库也没用。
+> 自签证书的 SAN 里只有 `localhost` 和各网卡的**局域网** IP，
+> `127.0.0.1` 因为是回环地址被 `!info.internal` 过滤掉了。
+> 写成 `127.0.0.1` 会主机名校验失败——**导入证书也救不回来，因为 SAN 里根本没有这个条目**。
 
-### 写进 SSH 配置更省事
+#### 常驻化（systemd）
 
-`~/.ssh/config`：
+`ssh -N -R` 断线不会自己恢复。放在 **OCS 机器**上：
+
+```ini
+# /etc/systemd/system/ocs-tunnel.service
+[Unit]
+Description=Reverse SSH tunnel to VPS for OCS Desktop API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=<运行 OCS 的用户>
+ExecStart=/usr/bin/ssh -N \
+  -p <SSH端口> \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -i /home/<用户>/.ssh/id_ed25519_ocs \
+  -R 15320:127.0.0.1:15320 \
+  <用户名>@<VPS公网IP>
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now ocs-tunnel
+sudo systemctl status ocs-tunnel
+```
+
+两个坑：
+
+- **`ExitOnForwardFailure=yes` 必须有。** 否则当 VPS 侧 15320 已被占用
+  （比如上一次连接还没被回收）时，ssh 会**连上但不做端口转发**，
+  `Restart=always` 永远不触发，你会看到一个"隧道进程活着但端口不通"的诡异状态
+- **必须用公钥认证。** 无人值守没法输密码。如果服务器的 sshd 只允许密码
+  （握手时会显示 `Permission denied (password)`——括号里**没有** `publickey` 就是这个情况），
+  需要先开公钥：
+
+  ```bash
+  sudo sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+  sudo systemctl restart sshd
+  ```
+
+  顺带一提，**只开密码、关掉公钥**既不便于自动化，也更容易被暴力破解，建议一并改掉。
+
+---
+
+### 正向隧道（访问方能直连 OCS 机器）
+
+在**访问方**的机器上执行：
+
+```bash
+ssh -N -L 15320:127.0.0.1:15320 \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    <用户名>@<OCS机器地址>
+```
+
+写进 `~/.ssh/config` 更省事：
 
 ```
 Host ocs
-    HostName 192.168.1.30
-    User hanser
+    HostName <OCS机器地址>
+    User <用户名>
     LocalForward 15320 127.0.0.1:15320
     ServerAliveInterval 30
     ServerAliveCountMax 3
 ```
 
-之后只要 `ssh -N ocs` 就能建好隧道。
+之后只要 `ssh -N ocs`。
 
-### 几个注意点
+---
+
+### 几个通用注意点
 
 - **SSE 不受隧道影响**。裸 TCP 转发，不需要任何额外配置。但隧道断开时事件流会断，
   用 `EventSource` 的话会自动重连；自己写的客户端要处理重连
 - **隧道下 `?apiKey=` 是安全的**。没有反代就没有 access.log，密钥只可能出现在
   浏览器历史里。所以浏览器里直接 `<img src="...screenshot?apiKey=xxx">` 看截图是可行的
-- **要让第三台机器也能用**：加 `-g`（或写 `-L 0.0.0.0:15320:...`）。
-  注意这会把端口暴露给所有能访问**你这台客户端**的机器
+- **反向隧道下，VPS 上的任何进程都能访问这个端口**——而它能做的包括"在 OCS 机器上
+  拉起浏览器进程"。所以 VPS 必须是专用、不与他人共享的
+- **要让第三方机器也能用**：正向加 `-g`，反向加 `GatewayPorts`。
+  注意两者都会把端口暴露给更多机器，非必要不要开
 - **Windows 自带 OpenSSH**，上述命令在 PowerShell / Git Bash 里同样可用
 
 ### 验证
 
 ```bash
-# 隧道建立前：局域网地址应该已经不通了（因为改成了 127.0.0.1 监听）
-curl -k --max-time 3 https://192.168.1.30:15320/api/v1/health   # 预期超时
+# OCS 机器上：改完监听地址后，局域网地址应该已经不通了
+curl -k --max-time 3 https://<OCS的局域网IP>:15320/api/v1/health   # 预期超时
 
-# 隧道建立后：localhost 可用
+# VPS（或访问方）上：隧道通了
 curl -k -H "X-API-Key: $KEY" https://localhost:15320/api/v1/health
 ```
+
+响应里确认这几位：
+
+```json
+{ "data": {
+    "listening": true,
+    "rendererReady": true,        // 为 true 才说明接口能真正干活
+    "panel": { "bindAddress": "127.0.0.1" }
+} }
+```
+
+> 密钥建议用 `read -s` 读入而不是直接写在命令行上，否则会落到 shell history：
+> ```bash
+> read -s -p "API Key: " KEY && export KEY
+> ```
 
 ---
 
@@ -709,9 +814,10 @@ curl -k -H "X-API-Key: $KEY" https://localhost:15320/api/v1/health
 
 ### 安全
 
-- **仅限可信内网**。密钥是 bearer token 形式，能拿到它的人就能在你的机器上拉起浏览器进程
+- **绝不直接暴露到公网**。密钥是 bearer token，能拿到它的人就能在你的机器上拉起浏览器进程。
+  需要跨网络访问请走第六节的 SSH 隧道，而不是端口映射或反向代理
 - 走 HTTPS 自签证书，**建议固定证书指纹**而不是简单关闭校验
-- 调用日志里**不要记录 `automationScripts` 字段**——里面有明文账号密码
+- 调用日志里**不要记录 `automationScripts` 字段**——里面有明文账号密码（见「能力边界」）
 
 ### 能力边界
 
