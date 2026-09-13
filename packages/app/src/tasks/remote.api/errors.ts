@@ -21,6 +21,8 @@ export type ApiErrorCode =
 	| 'BROWSER_BUSY'
 	| 'NOT_RUNNING'
 	| 'EXECUTABLE_PATH_NOT_SET'
+	// 启动流程走完了但浏览器没进入运行状态（进程起来了又立刻退出等）
+	| 'LAUNCH_FAILED'
 	| 'RENDERER_UNAVAILABLE'
 	| 'LAUNCH_TIMEOUT'
 	| 'CLOSE_TIMEOUT'
@@ -47,6 +49,8 @@ const HTTP_STATUS: Record<ApiErrorCode, number> = {
 	BROWSER_BUSY: 409,
 	NOT_RUNNING: 409,
 	EXECUTABLE_PATH_NOT_SET: 412,
+	// 不是调用方的问题，而是本机环境/浏览器本身起不来
+	LAUNCH_FAILED: 500,
 	RENDERER_UNAVAILABLE: 503,
 	LAUNCH_TIMEOUT: 504,
 	CLOSE_TIMEOUT: 504,
