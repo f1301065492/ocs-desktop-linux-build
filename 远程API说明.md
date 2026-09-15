@@ -125,10 +125,13 @@ Node.js 里可以用 `checkServerIdentity` 或 `tls` 的 `ca` 选项做等效校
 | `NOT_RUNNING` | 409 | 浏览器未在运行 | 截图/关闭一个没启动的浏览器会得到这个 |
 | `NO_PAGE` | 409 | 浏览器一个页面都没有 | 通常是刚启动还没加载完 |
 | `ALREADY_RUNNING` | 409 | 该浏览器已在运行或正在启动 | 先查状态，别重复启动 |
-| `BROWSER_BUSY` | 409 | 该浏览器有进行中的任务 | 等上一个任务结束 |
+| `BROWSER_BUSY` | 409 | 该浏览器有进行中的任务，或正处于启动/关闭中 | 等上一个任务结束 |
+| `DUPLICATE_AUTOMATION_SCRIPT` | 409 | 该浏览器已有同名的自动化程序 | 用 `DELETE` 先移除，或换一个脚本 |
+| `AUTOMATION_SCRIPT_NOT_FOUND` | 404 | 该浏览器没有这个自动化程序 | 用 `GET /browsers/:uid` 看现有列表 |
 | `LAUNCH_FAILED` | 500 | 启动流程走完了但没进入运行状态 | 多半是浏览器本身起不来（版本过高、路径失效），查软件内提示 |
 | `LAUNCH_TIMEOUT` | 504 | 启动超时 | **结果未知**，先查状态再决定是否重试 |
 | `CLOSE_TIMEOUT` | 504 | 关闭超时 | 同上 |
+| `RELAUNCH_TIMEOUT` | 504 | 重启超时 | 同上 |
 | `WORKER_TIMEOUT` | 504 | 子进程未在超时内响应 | 稍后重试 |
 | `WORKER_ERROR` | 500 | 子进程执行出错 | 看 `message` |
 | `RENDERER_UNAVAILABLE` | 503 | 渲染进程未就绪或刚重载 | 等几秒重试 |
@@ -145,8 +148,11 @@ Node.js 里可以用 `checkServerIdentity` 或 `tls` 的 `ca` 选项做等效校
 | POST | `/api/v1/browsers` | 创建浏览器 |
 | GET | `/api/v1/browsers` | 列出浏览器 |
 | GET | `/api/v1/browsers/:uid` | 查单个浏览器详情（含实时状态） |
+| PUT | `/api/v1/browsers/:uid` | 改名 / 改备注 / 改标签（部分更新） |
 | POST | `/api/v1/browsers/:uid/launch` | 启动浏览器（异步任务） |
 | POST | `/api/v1/browsers/:uid/close` | 关闭浏览器（异步任务） |
+| POST | `/api/v1/browsers/:uid/scripts` | 追加自动化程序（运行中会自动重启） |
+| DELETE | `/api/v1/browsers/:uid/scripts/:scriptName` | 移除自动化程序（运行中会自动重启） |
 | GET | `/api/v1/browsers/:uid/pages` | 列出该浏览器打开的标签页 |
 | GET | `/api/v1/browsers/:uid/screenshot` | 截取页面画面 |
 | GET | `/api/v1/tasks/:taskId` | 查询任务状态 |
@@ -372,6 +378,133 @@ profile 锁会让新实例起不来。
 
 ---
 
+### PUT /api/v1/browsers/:uid
+
+改名 / 改备注 / 改标签。**部分更新：只传要改的字段，缺省即不动。**
+
+**请求体**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `name` | string | 1–64 字符。**不能传空串** |
+| `notes` | string | ≤2000 字符。**可以传空串表示清空** |
+| `tags` | array | `[{ "name": "标签名", "color": "#165dff" }]`，最多 20 个。**传的是完整数组**，增删标签都靠它；传 `[]` 表示清空 |
+
+至少要提供一个字段，否则 `400 INVALID_ARGUMENT`。
+
+```bash
+curl -k -X PUT https://localhost:15320/api/v1/browsers/<uid> \
+  -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"name":"订单-20260915-001","notes":"由订单系统创建","tags":[{"name":"自动","color":"#165dff"}]}'
+```
+
+**响应 `200`**
+
+```json
+{ "status": "success", "browser": { /* 脱敏后的最新视图 */ }, "requestId": "..." }
+```
+
+**错误**
+
+| 情况 | 响应 |
+| --- | --- |
+| uid 不存在 | `404 BROWSER_NOT_FOUND` |
+| 一个字段都没传 | `400 INVALID_ARGUMENT` |
+| `automationScripts` / `cachePath` / `uid` / `type` | `400 UNKNOWN_FIELD` |
+| name 超长或为空、notes 超长、tags 超 20 个 | `400 INVALID_ARGUMENT` |
+| 浏览器正在启动/关闭中，或已 orphaned | `409 BROWSER_BUSY` |
+
+> ⚠️ **这个接口刻意不接受 `automationScripts`。** 网关下发给前端的配置是脱敏的
+> （只有 `has_value` 没有 `value`），前端手里没有密码；如果允许整体替换，
+> 写回时会把没动过的脚本密码清空。脚本的增删请走下面两个接口。
+
+**改名不会强制唯一。** 允许与已有浏览器重名（图形界面里改名也不查重），
+也不会自动加序号——那是**创建**时的行为。
+
+---
+
+### POST /api/v1/browsers/:uid/scripts
+
+**追加**自动化程序。注意语义是追加，不是替换。
+
+**请求体**
+
+```json
+{
+  "scripts": [
+    { "name": "超星-手机密码登录",
+      "configs": { "phone": "13800000000", "password": "xxxxxx" } }
+  ]
+}
+```
+
+`configs` 只需给「键 → 值」，label / type / required 由服务端按脚本 manifest 补齐
+（和创建接口一致）——先用 `GET /api/v1/automation-scripts` 查有哪些键。
+
+**响应 `200`**
+
+```json
+{
+  "status": "success",
+  "browser": { /* 最新视图 */ },
+  "restart": { "taskId": "e5ea5e35-..." }    // 见下方说明
+}
+```
+
+**关于 `restart`**
+
+`automationScripts` 是在启动时**一次性**传给浏览器子进程的，运行中改不会生效。
+所以：
+
+| 浏览器状态 | 行为 | `restart` |
+| --- | --- | --- |
+| 未运行（`closed`） | 只保存，下次启动生效 | `null` |
+| 运行中（`launched`） | 保存后**自动重启** | `{ taskId }` |
+
+重启是异步任务（启动可能耗时数分钟），调用方拿 `taskId` 轮询
+`GET /api/v1/tasks/:taskId` 或听 SSE 即可。**响应本身是立即返回的。**
+
+**这个接口比创建接口更严格**：`required: true` 的配置项没填会直接 `400`。
+创建接口为了兼容既有调用方不做这个校验（允许先建浏览器、稍后再补密码）。
+
+**错误**
+
+| 情况 | 响应 |
+| --- | --- |
+| 脚本名不在名单里 | `422 UNKNOWN_AUTOMATION_SCRIPT` |
+| 必填项没填 / `configs` 里有 manifest 不存在的键 | `400 INVALID_ARGUMENT` |
+| 该浏览器已有同名单脚本 | `409 DUPLICATE_AUTOMATION_SCRIPT` |
+| `scripts` 为空数组 | `400 INVALID_ARGUMENT` |
+| 浏览器正在启动/关闭中，或已有进行中的任务 | `409 BROWSER_BUSY` |
+
+> 已有同名单脚本时**报错而不是静默覆盖**——静默覆盖会让用户以为改成功了，
+> 实际用的还是旧配置。要改配置就先 `DELETE` 再 `POST`。
+
+---
+
+### DELETE /api/v1/browsers/:uid/scripts/:scriptName
+
+移除自动化程序。脚本名需要 URL 编码（含中文时）。
+
+```bash
+curl -k -X DELETE "https://localhost:15320/api/v1/browsers/<uid>/scripts/$(python3 -c "import urllib.parse;print(urllib.parse.quote('超星-手机密码登录'))")" \
+  -H "X-API-Key: $KEY"
+```
+
+**响应 `200`**：结构与 `POST` 完全一致（含 `restart` 字段，运行中同样自动重启）。
+
+**错误**
+
+| 情况 | 响应 |
+| --- | --- |
+| uid 不存在 | `404 BROWSER_NOT_FOUND` |
+| 该浏览器没有这个脚本 | `404 AUTOMATION_SCRIPT_NOT_FOUND` |
+| 浏览器正在启动/关闭中 | `409 BROWSER_BUSY` |
+
+> ⚠️ **这是不可撤销的破坏性操作**，OCS 侧没有回收站。界面上建议加二次确认。
+
+---
+
 ### GET /api/v1/browsers/:uid/pages
 
 列出该浏览器当前打开的所有标签页。
@@ -465,6 +598,14 @@ profile 锁会让新实例起不来。
 }
 ```
 
+**`kind` 取值**
+
+| 值 | 来源 |
+| --- | --- |
+| `launch` | 启动接口 |
+| `close` | 关闭接口 |
+| `relaunch` | 脚本增删触发的自动重启 |
+
 **`state` 取值**
 
 | 值 | 含义 | 调用方该做什么 |
@@ -487,6 +628,26 @@ profile 锁会让新实例起不来。
 超时那一刻浏览器**可能真的已经起来了**，只是 `launched` 事件没等到、或还卡在安装脚本。
 此时若重试启动，会撞上 Chromium 的 profile 锁导致新实例起不来。
 **正确做法是先 `GET /api/v1/browsers/:uid` 看实际状态。**
+
+**⚠️⚠️ `launched` 是在自动化脚本跑完之后才发出的**
+
+这一点对预估耗时至关重要。浏览器内部的启动顺序是：
+
+```
+打开浏览器 → 加载扩展 → 安装用户脚本 → 【跑自动化程序】→ 才发出 launched
+```
+
+也就是说 `state: succeeded` **不代表"浏览器起来了"，而是"浏览器起来了、而且自动化程序也跑完了"**。
+
+后果：
+
+- 浏览器配置了自动化程序时，启动/重启会明显变慢。实测无脚本启动约 **10 秒**，
+  而带一个登录脚本会显著增加（脚本要真的去访问目标网站并等元素出现）。
+- 如果某个脚本卡住（比如填了不存在的学校名），它会把 `launched` 一直拖住，
+  直到任务超时。**这时并不是启动失败**，而是脚本还在跑。
+
+> 调用方如果只想确认"浏览器进程是否起来了"，不要依赖任务终态，
+> 应该看 `GET /api/v1/browsers/:uid` 的 `status` 字段。
 
 **任务表不持久化**：应用重启后旧 `taskId` 会返回 `404 TASK_NOT_FOUND`。
 需要跨重启追溯时，用创建时的 `clientToken` 调 `GET /api/v1/browsers?clientToken=`。
@@ -619,6 +780,45 @@ for (;;) {
 	}
 }
 ```
+
+---
+
+### 场景：修改运行中浏览器的配置
+
+改名/备注/标签是纯展示数据，直接改，不涉及重启：
+
+```bash
+curl -k -X PUT $BASE/api/v1/browsers/<uid> \
+  -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"name":"订单-20260915-001","tags":[{"name":"已付款","color":"#00b42a"}]}'
+```
+
+**增删自动化程序会让浏览器重启**，所以要按任务处理：
+
+```bash
+# 1. 追加脚本 —— 立即返回，不阻塞
+RESP=$(curl -k -X POST $BASE/api/v1/browsers/<uid>/scripts \
+  -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"scripts":[{"name":"超星-手机密码登录","configs":{"phone":"13800000000","password":"xxxxxx"}}]}')
+
+# 2. 取出重启任务 ID（未运行时是 null，表示下次启动生效）
+TASK=$(echo "$RESP" | jq -r '.restart.taskId // empty')
+echo "restart task = $TASK"
+
+# 3. 等它结束（重启包含一次完整启动，可能几十秒到几分钟）
+[ -n "$TASK" ] && curl -k -H "X-API-Key: $KEY" "$BASE/api/v1/tasks/$TASK?wait=60"
+```
+
+> 也可以不轮询，改用 SSE 监听 `task` 事件（见下节）。
+
+**改配置前先看状态**，避免撞上 `409`：
+
+```bash
+curl -k -H "X-API-Key: $KEY" $BASE/api/v1/browsers/<uid> | jq '.data.status'
+```
+
+`status` 为 `launching` / `closing` 时会拒绝修改（`409 BROWSER_BUSY`）；
+为 `orphaned` 时也拒绝——那意味着进程可能还在跑但软件已失去句柄，需要在图形界面处理。
 
 ---
 
@@ -821,10 +1021,17 @@ curl -k -H "X-API-Key: $KEY" https://localhost:15320/api/v1/health
 
 ### 能力边界
 
-- **没有删除接口**。调用方创建出来的浏览器只能人工在图形界面里删。
+**能做**：创建浏览器、启动/关闭/重启、改名/备注/标签、增删自动化程序、查标签页、截图、实时事件。
+
+**不能做**：
+
+- **不能删除浏览器**。只能人工在图形界面里删。
   因此**务必使用 `clientToken`**，避免重试造成永久垃圾
+- **不能改建浏览器所在的文件夹**（`parentUid` 只在创建时接受）
+- **不能批量操作**。所有写接口都是单 uid 粒度
 - **没有远程操作接口**（点击/输入/导航）。如需，将来会以
   `POST /api/v1/browsers/:uid/actions` 的形式提供，与现有接口风格一致
+- **没有日志接口**
 - **没有连续画面**。截图是"拉一张是一张"，需要连续画面时由调用方自行控制频率
 
 ### 性能与限制
