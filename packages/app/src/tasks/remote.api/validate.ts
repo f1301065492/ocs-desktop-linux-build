@@ -220,6 +220,96 @@ export function parseCreateBrowserInput(body: unknown): CreateBrowserInput {
 	return result;
 }
 
+/** 更新浏览器的允许字段。同样不接受 cachePath / uid / type */
+const UPDATE_ALLOWED_KEYS = ['name', 'notes', 'tags'];
+
+export interface UpdateBrowserInput {
+	name?: string;
+	notes?: string;
+	tags?: Array<{ name: string; color: string }>;
+}
+
+/**
+ * 解析更新浏览器的请求体（部分更新：只传要改的字段）。
+ *
+ * 只接受 name / notes / tags 三类。automationScripts 走独立的追加/删除接口——
+ * 因为网关下发给浏览器的配置是脱敏过的（只有 has_value 没有 value），
+ * 前端无法"读出完整配置→改一个字段→整体写回"，那样会把没动过的密码清空。
+ */
+export function parseUpdateBrowserInput(body: unknown): UpdateBrowserInput {
+	assertObject(body, 'body');
+	const keys = Object.keys(body);
+	for (const key of keys) {
+		if (!UPDATE_ALLOWED_KEYS.includes(key)) {
+			throw new ApiError('UNKNOWN_FIELD', `不支持的字段: ${key}`);
+		}
+	}
+	if (keys.length === 0) {
+		throw new ApiError('INVALID_ARGUMENT', '至少要提供一个待更新字段（name / notes / tags）');
+	}
+
+	const result: UpdateBrowserInput = {};
+
+	if (body.name !== undefined) {
+		// name 不允许传空：改成一个空名字没有意义，多半是调用方拼错了
+		const name = optionalString(body.name, 'name', NAME_MAX);
+		if (name) result.name = name;
+	}
+
+	if (body.notes !== undefined) {
+		if (typeof body.notes !== 'string') {
+			throw new ApiError('INVALID_ARGUMENT', 'notes 必须是字符串');
+		}
+		if (body.notes.length > NOTES_MAX) {
+			throw new ApiError('INVALID_ARGUMENT', `notes 长度不能超过 ${NOTES_MAX}`);
+		}
+		// notes 允许显式传空串表示清空
+		result.notes = body.notes;
+	}
+
+	if (body.tags !== undefined) {
+		// tags 传的是完整数组，增删都靠它；传空数组表示清空
+		if (!Array.isArray(body.tags)) {
+			throw new ApiError('INVALID_ARGUMENT', 'tags 必须是数组');
+		}
+		result.tags = parseTags(body.tags) ?? [];
+	}
+
+	return result;
+}
+
+/** 解析追加自动化脚本的请求体 */
+export function parseAddScriptsInput(body: unknown): {
+	scripts: Array<{ name: string; configs?: Record<string, AutomationConfigValue> }>;
+} {
+	assertObject(body, 'body');
+	for (const key of Object.keys(body)) {
+		if (key !== 'scripts') {
+			throw new ApiError('UNKNOWN_FIELD', `不支持的字段: ${key}`);
+		}
+	}
+	const scripts = parseAutomationScripts(body.scripts);
+	if (!scripts || scripts.length === 0) {
+		throw new ApiError('INVALID_ARGUMENT', 'scripts 不能为空');
+	}
+	return { scripts };
+}
+
+/** 校验 URL 路径里的脚本名 */
+export function parseScriptName(raw: unknown): string {
+	if (typeof raw !== 'string' || raw.length === 0) {
+		throw new ApiError('INVALID_ARGUMENT', '脚本名不能为空');
+	}
+	const name = raw.trim();
+	if (name.length > NAME_MAX) {
+		throw new ApiError('INVALID_ARGUMENT', `脚本名长度不能超过 ${NAME_MAX}`);
+	}
+	if (hasControlChar(name)) {
+		throw new ApiError('INVALID_ARGUMENT', '脚本名不能包含控制字符');
+	}
+	return name;
+}
+
 /** 解析截图质量参数（仅 jpeg 有效），默认 70 */
 export function parseQuality(raw: unknown): number {
 	if (raw === undefined) {

@@ -17,6 +17,8 @@ export type ApiErrorCode =
 	| 'PARENT_NOT_FOUND'
 	| 'PARENT_NOT_FOLDER'
 	| 'UNKNOWN_AUTOMATION_SCRIPT'
+	| 'DUPLICATE_AUTOMATION_SCRIPT'
+	| 'AUTOMATION_SCRIPT_NOT_FOUND'
 	| 'ALREADY_RUNNING'
 	| 'BROWSER_BUSY'
 	| 'NOT_RUNNING'
@@ -26,6 +28,7 @@ export type ApiErrorCode =
 	| 'RENDERER_UNAVAILABLE'
 	| 'LAUNCH_TIMEOUT'
 	| 'CLOSE_TIMEOUT'
+	| 'RELAUNCH_TIMEOUT'
 	// 以下来自子进程（ScriptWorker）截图/页面查询链路
 	| 'PAGE_NOT_FOUND'
 	| 'NO_PAGE'
@@ -45,6 +48,9 @@ const HTTP_STATUS: Record<ApiErrorCode, number> = {
 	PARENT_NOT_FOUND: 422,
 	PARENT_NOT_FOLDER: 422,
 	UNKNOWN_AUTOMATION_SCRIPT: 422,
+	// 已存在同名单脚本：报错而不是静默覆盖，否则用户以为改成功了
+	DUPLICATE_AUTOMATION_SCRIPT: 409,
+	AUTOMATION_SCRIPT_NOT_FOUND: 404,
 	ALREADY_RUNNING: 409,
 	BROWSER_BUSY: 409,
 	NOT_RUNNING: 409,
@@ -54,6 +60,8 @@ const HTTP_STATUS: Record<ApiErrorCode, number> = {
 	RENDERER_UNAVAILABLE: 503,
 	LAUNCH_TIMEOUT: 504,
 	CLOSE_TIMEOUT: 504,
+	// 重启 = 关闭 + 启动，超时语义与启动一致但单独给一个码，便于调用方区分
+	RELAUNCH_TIMEOUT: 504,
 	// 没有匹配的页面是「找不到资源」，用 404；
 	// 浏览器一个页面都没有属于状态冲突，用 409 更准确
 	PAGE_NOT_FOUND: 404,

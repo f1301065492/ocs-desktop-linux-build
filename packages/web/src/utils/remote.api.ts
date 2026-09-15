@@ -132,7 +132,15 @@ interface CreatePayload {
  * 同时也拦下 manifest 里不存在的键，避免无效配置一路透传到子进程才炸。
  */
 async function buildAutomationScripts(
-	input: CreatePayload['automationScripts']
+	input: CreatePayload['automationScripts'],
+	/**
+	 * 是否强制校验 required 配置项。
+	 *
+	 * 创建接口维持原行为（不校验）——已有的调用方可能先建浏览器、稍后再去
+	 * 图形界面补密码，突然开始拒绝会打断他们。新增的「追加脚本」接口走严格模式，
+	 * 因为用户是明确要加一个脚本，加了却跑不起来才是更差的体验。
+	 */
+	enforceRequired = false
 ): Promise<RawAutomationScript[] | undefined> {
 	if (!input || input.length === 0) {
 		return undefined;
@@ -165,6 +173,15 @@ async function buildAutomationScripts(
 				);
 			}
 			configs[key].value = value;
+		}
+
+		if (enforceRequired) {
+			for (const [key, config] of Object.entries(configs)) {
+				const empty = config.value === undefined || config.value === null || config.value === '';
+				if (config.required && empty) {
+					throw apiError('INVALID_ARGUMENT', `自动化程序「${item.name}」的必填项「${config.label ?? key}」未填写`);
+				}
+			}
 		}
 
 		return { name: item.name, configs } as RawAutomationScript;
@@ -365,6 +382,127 @@ async function handlePages(payload: { uid: string }) {
 	return invokeWorker(process, 'listPages', 'pages-result', {}, WORKER_OP_TIMEOUT);
 }
 
+/** 部分更新 name / notes / tags。不涉及 automationScripts——那个走追加/删除接口 */
+async function handleUpdate(payload: {
+	uid: string;
+	name?: string;
+	notes?: string;
+	tags?: Array<{ name: string; color: string }>;
+}) {
+	const browser = Browser.from(payload.uid);
+	if (!browser) {
+		throw apiError('BROWSER_NOT_FOUND', `浏览器不存在: ${payload.uid}`);
+	}
+	// 历史记录在旧数据里可能缺失，先补一个空数组
+	if (!browser.histories) {
+		browser.histories = [];
+	}
+
+	// 改名走实体自带的方法：它会写一条「改名」历史，并让实体退出「编辑中」状态
+	if (payload.name !== undefined && payload.name !== browser.name) {
+		browser.rename(payload.name);
+	}
+
+	if (payload.notes !== undefined) {
+		browser.notes = payload.notes;
+	}
+
+	if (payload.tags !== undefined) {
+		// tags 是整体替换，但按 UI 的约定逐条写历史，这样操作历史里能看出增删了什么
+		const before = new Set((browser.tags ?? []).map((tag) => tag.name));
+		const afterNames = new Set(payload.tags.map((tag) => tag.name));
+
+		for (const tag of payload.tags) {
+			if (!before.has(tag.name)) {
+				browser.histories.unshift({ action: '添加标签', content: tag.name, time: Date.now() });
+			}
+		}
+		for (const tag of browser.tags ?? []) {
+			if (!afterNames.has(tag.name)) {
+				browser.histories.unshift({ action: '删除标签', content: tag.name, time: Date.now() });
+			}
+		}
+
+		browser.tags = JSON.parse(JSON.stringify(payload.tags));
+	}
+
+	await persistBrowserTree();
+	return { browser: serializeBrowser(browser) };
+}
+
+/** 追加自动化程序。语义是追加不是替换——见 validate.ts 里 parseUpdateBrowserInput 的说明 */
+async function handleAddScripts(payload: {
+	uid: string;
+	scripts: Array<{ name: string; configs?: Record<string, AutomationConfigValue> }>;
+}) {
+	const browser = Browser.from(payload.uid);
+	if (!browser) {
+		throw apiError('BROWSER_NOT_FOUND', `浏览器不存在: ${payload.uid}`);
+	}
+
+	// 严格模式：用户是明确要加这个脚本，加了却因为缺必填项跑不起来是更差的体验
+	const built = (await buildAutomationScripts(payload.scripts as CreatePayload['automationScripts'], true)) ?? [];
+
+	const existing = new Set((browser.automationScripts ?? []).map((script) => script.name));
+	for (const script of built) {
+		// 报错而不是静默覆盖：静默覆盖会让用户以为改成功了，实际用的还是旧配置
+		if (existing.has(script.name)) {
+			throw apiError('DUPLICATE_AUTOMATION_SCRIPT', `该浏览器已有自动化程序「${script.name}」`);
+		}
+	}
+
+	browser.automationScripts = [...(browser.automationScripts ?? []), ...built];
+	await persistBrowserTree();
+	return { browser: serializeBrowser(browser) };
+}
+
+/** 移除自动化程序 */
+async function handleRemoveScript(payload: { uid: string; scriptName: string }) {
+	const browser = Browser.from(payload.uid);
+	if (!browser) {
+		throw apiError('BROWSER_NOT_FOUND', `浏览器不存在: ${payload.uid}`);
+	}
+
+	const list = [...(browser.automationScripts ?? [])];
+	const index = list.findIndex((script) => script.name === payload.scriptName);
+	if (index === -1) {
+		throw apiError('AUTOMATION_SCRIPT_NOT_FOUND', `该浏览器没有自动化程序「${payload.scriptName}」`);
+	}
+	list.splice(index, 1);
+
+	browser.automationScripts = list;
+	await persistBrowserTree();
+	return { browser: serializeBrowser(browser) };
+}
+
+/**
+ * 重启浏览器（关闭 + 启动）。
+ *
+ * 由主进程在「配置已变更且浏览器正在运行」时通过任务机制调用——
+ * 重启耗时与启动相当，不能阻塞 HTTP 响应。
+ */
+async function handleRelaunch(payload: { taskId?: string; uid: string }) {
+	const browser = Browser.from(payload.uid);
+	if (!browser) {
+		throw apiError('BROWSER_NOT_FOUND', `浏览器不存在: ${payload.uid}`);
+	}
+	if (!store.render.setting.launchOptions.executablePath) {
+		throw apiError('EXECUTABLE_PATH_NOT_SET', '浏览器路径未配置，请在软件设置中修改');
+	}
+
+	reportProgress(payload.taskId, 'precheck', '正在重启浏览器');
+	await browser.relaunch();
+
+	// 与启动一致：进程的实时状态才是权威判据，不能用 relaunch() 的返回值
+	const process = Process.from(payload.uid);
+	if (!process || process.status !== 'launched') {
+		throw apiError('LAUNCH_FAILED', '浏览器未能进入运行状态，请查看软件内的错误提示');
+	}
+
+	reportProgress(payload.taskId, 'launched', '浏览器已重启');
+	return { uid: payload.uid, status: 'launched' };
+}
+
 const handlers: Record<string, (payload: any) => Promise<unknown>> = {
 	'browser.list': handleList,
 	'browser.get': handleGet,
@@ -372,7 +510,11 @@ const handlers: Record<string, (payload: any) => Promise<unknown>> = {
 	'browser.launch': handleLaunch,
 	'browser.close': handleClose,
 	'browser.screenshot': handleScreenshot,
-	'browser.pages': handlePages
+	'browser.pages': handlePages,
+	'browser.update': handleUpdate,
+	'browser.addScripts': handleAddScripts,
+	'browser.removeScript': handleRemoveScript,
+	'browser.relaunch': handleRelaunch
 };
 
 async function dispatch(method: string, payload: unknown): Promise<unknown> {

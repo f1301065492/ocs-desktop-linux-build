@@ -7,7 +7,7 @@ import { broadcast } from './events';
 const logger = Logger('remote-api');
 
 export type TaskState = 'queued' | 'running' | 'succeeded' | 'failed' | 'timeout' | 'unknown';
-export type TaskKind = 'launch' | 'close';
+export type TaskKind = 'launch' | 'close' | 'relaunch';
 export type TaskPhase =
 	| 'queued'
 	| 'precheck'
@@ -17,6 +17,38 @@ export type TaskPhase =
 	| 'launched'
 	| 'closing'
 	| 'closed';
+
+/** 每种任务转调哪个渲染侧方法 */
+const TASK_METHOD: Record<TaskKind, string> = {
+	launch: 'browser.launch',
+	close: 'browser.close',
+	relaunch: 'browser.relaunch'
+};
+
+/** 每种任务的起始阶段与成功后的终了阶段 */
+const TASK_PHASE: Record<TaskKind, { start: TaskPhase; end: TaskPhase }> = {
+	launch: { start: 'precheck', end: 'launched' },
+	close: { start: 'closing', end: 'closed' },
+	// 重启 = 关闭 + 启动，耗时与启动相当，所以阶段语义沿用启动那一套
+	relaunch: { start: 'precheck', end: 'launched' }
+};
+
+/** 只有 close 用关闭超时，其余都按启动超时算（重启里包含一次完整启动） */
+function timeoutFor(kind: TaskKind): number {
+	const config = getRemoteApiConfig();
+	return kind === 'close' ? config.closeTimeoutMs : config.launchTimeoutMs;
+}
+
+/**
+ * 超时时回报哪个错误码。
+ * 必须是逐类型映射——之前写成 `kind === 'launch' ? LAUNCH_TIMEOUT : CLOSE_TIMEOUT`，
+ * 加入 relaunch 后它会被错报成 CLOSE_TIMEOUT，让人以为是关闭卡住了。
+ */
+const TIMEOUT_CODE: Record<TaskKind, 'LAUNCH_TIMEOUT' | 'CLOSE_TIMEOUT' | 'RELAUNCH_TIMEOUT'> = {
+	launch: 'LAUNCH_TIMEOUT',
+	close: 'CLOSE_TIMEOUT',
+	relaunch: 'RELAUNCH_TIMEOUT'
+};
 
 export interface RemoteTask {
 	taskId: string;
@@ -147,22 +179,18 @@ function broadcastTask(task: RemoteTask): void {
 }
 
 async function execute(task: RemoteTask): Promise<void> {
+	const phases = TASK_PHASE[task.kind];
 	task.state = 'running';
 	task.startedAt = Date.now();
-	task.phase = task.kind === 'launch' ? 'precheck' : 'closing';
+	task.phase = phases.start;
 	broadcastTask(task);
 
-	const config = getRemoteApiConfig();
-	const timeoutMs = task.kind === 'launch' ? config.launchTimeoutMs : config.closeTimeoutMs;
+	const timeoutMs = timeoutFor(task.kind);
 
 	try {
-		const result = await invokeRenderer(
-			task.kind === 'launch' ? 'browser.launch' : 'browser.close',
-			{ taskId: task.taskId, uid: task.uid },
-			{ timeoutMs }
-		);
+		const result = await invokeRenderer(TASK_METHOD[task.kind], { taskId: task.taskId, uid: task.uid }, { timeoutMs });
 		task.state = 'succeeded';
-		task.phase = task.kind === 'launch' ? 'launched' : 'closed';
+		task.phase = phases.end;
 		task.result = result;
 	} catch (err) {
 		if (err instanceof BridgeTimeoutError) {
@@ -173,7 +201,7 @@ async function execute(task: RemoteTask): Promise<void> {
 			 */
 			task.state = 'timeout';
 			task.error = {
-				code: task.kind === 'launch' ? 'LAUNCH_TIMEOUT' : 'CLOSE_TIMEOUT',
+				code: TIMEOUT_CODE[task.kind],
 				message: '操作超时，实际结果未知。请调用 GET /api/v1/browsers/:uid 复核状态，勿盲目重试'
 			};
 		} else if (err instanceof BridgeUnavailableError) {

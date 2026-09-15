@@ -6,7 +6,16 @@ import { Logger } from '../../logger';
 import { getRemoteApiConfig, getRemoteApiPublicConfig } from './config';
 import { ApiError, fail, ok, toApiError } from './errors';
 import { requireApiKey } from './auth';
-import { parseCreateBrowserInput, parseUid, parseClientTokenFilter, parseWaitSeconds, parseQuality } from './validate';
+import {
+	parseCreateBrowserInput,
+	parseUpdateBrowserInput,
+	parseAddScriptsInput,
+	parseScriptName,
+	parseUid,
+	parseClientTokenFilter,
+	parseWaitSeconds,
+	parseQuality
+} from './validate';
 import { createTask, getInflightTaskId, getTask, setTaskProgress, waitForTask } from './tasks';
 import {
 	attachRendererWindow,
@@ -258,6 +267,146 @@ function createApp(): express.Express {
 
 			const task = createTask('close', uid);
 			res.status(202).json(ok({ taskId: task.taskId, uid, state: task.state }, requestIdOf(req)));
+		})
+	);
+
+	/**
+	 * 浏览器是否允许修改配置。
+	 *
+	 * 启动中/关闭中做重启会打架；orphaned 表示进程可能还在跑但已经失去句柄，
+	 * 既关不掉也重启不了，只能让用户去图形界面处理。
+	 */
+	function assertMutable(uid: string, status: string | undefined): void {
+		if (status === 'launching' || status === 'closing') {
+			throw new ApiError('BROWSER_BUSY', `浏览器 ${uid} 正在${status === 'launching' ? '启动' : '关闭'}中，请稍后重试`);
+		}
+		if (status === 'orphaned') {
+			throw new ApiError(
+				'BROWSER_BUSY',
+				`浏览器 ${uid} 已失去控制（进程可能仍在运行），无法修改配置，需要在软件界面中处理`
+			);
+		}
+	}
+
+	/**
+	 * 配置变更后按需重启。
+	 *
+	 * automationScripts 是在 Process.init() 时一次性传给子进程的，运行中改不会生效，
+	 * 必须重启。而重启耗时与启动相当（脚本安装可能几分钟），所以走任务机制，
+	 * 不阻塞 HTTP 响应。返回 null 表示未运行，改动会在下次启动时生效。
+	 */
+	function scheduleRelaunch(uid: string, status: string | undefined): { taskId: string } | null {
+		if (status !== 'launched') {
+			return null;
+		}
+		const task = createTask('relaunch', uid);
+		return { taskId: task.taskId };
+	}
+
+	/**
+	 * 部分更新 name / notes / tags。
+	 *
+	 * 纯展示数据，不需要重启。automationScripts 刻意不在这里接受——
+	 * 网关下发给浏览器的配置是脱敏的（只有 has_value 没有 value），
+	 * 前端无法"读出完整配置→改一个字段→整体写回"，那样会把没动过的密码清空。
+	 */
+	api.put(
+		'/browsers/:uid',
+		asyncRoute(async (req, res) => {
+			ensureRenderer();
+			const uid = parseUid(req.params.uid);
+			const input = parseUpdateBrowserInput(req.body ?? {});
+
+			const browser = await getBrowserOrThrow(uid);
+			assertMutable(uid, (browser as { status?: string }).status);
+
+			try {
+				const applied = await invokeRenderer<{ browser: unknown }>(
+					'browser.update',
+					{ uid, ...input },
+					{
+						timeoutMs: FAST_OP_TIMEOUT
+					}
+				);
+				res.json(ok({ status: 'success', browser: applied.browser }, requestIdOf(req)));
+			} catch (err) {
+				throw translateRendererError(err);
+			}
+		})
+	);
+
+	/**
+	 * 追加自动化程序（语义是**追加**，不是替换）。
+	 *
+	 * 运行中会自动重启，因为脚本配置只在启动时传给子进程。
+	 * 响应里的 restart.taskId 就是这次重启任务，未运行时为 null。
+	 */
+	api.post(
+		'/browsers/:uid/scripts',
+		asyncRoute(async (req, res) => {
+			ensureRenderer();
+			const uid = parseUid(req.params.uid);
+			const input = parseAddScriptsInput(req.body ?? {});
+
+			const browser = await getBrowserOrThrow(uid);
+			const status = (browser as { status?: string }).status;
+			assertMutable(uid, status);
+
+			const inflight = getInflightTaskId(uid);
+			if (inflight) {
+				throw new ApiError('BROWSER_BUSY', `浏览器 ${uid} 已有进行中的任务: ${inflight}`);
+			}
+
+			let applied: { browser: unknown };
+			try {
+				applied = await invokeRenderer(
+					'browser.addScripts',
+					{ uid, scripts: input.scripts },
+					{
+						timeoutMs: FAST_OP_TIMEOUT
+					}
+				);
+			} catch (err) {
+				throw translateRendererError(err);
+			}
+
+			const restart = scheduleRelaunch(uid, status);
+			res.json(ok({ status: 'success', browser: applied.browser, restart }, requestIdOf(req)));
+		})
+	);
+
+	/** 移除自动化程序。运行中同样会自动重启 */
+	api.delete(
+		'/browsers/:uid/scripts/:scriptName',
+		asyncRoute(async (req, res) => {
+			ensureRenderer();
+			const uid = parseUid(req.params.uid);
+			const scriptName = parseScriptName(req.params.scriptName);
+
+			const browser = await getBrowserOrThrow(uid);
+			const status = (browser as { status?: string }).status;
+			assertMutable(uid, status);
+
+			const inflight = getInflightTaskId(uid);
+			if (inflight) {
+				throw new ApiError('BROWSER_BUSY', `浏览器 ${uid} 已有进行中的任务: ${inflight}`);
+			}
+
+			let applied: { browser: unknown };
+			try {
+				applied = await invokeRenderer(
+					'browser.removeScript',
+					{ uid, scriptName },
+					{
+						timeoutMs: FAST_OP_TIMEOUT
+					}
+				);
+			} catch (err) {
+				throw translateRendererError(err);
+			}
+
+			const restart = scheduleRelaunch(uid, status);
+			res.json(ok({ status: 'success', browser: applied.browser, restart }, requestIdOf(req)));
 		})
 	);
 
