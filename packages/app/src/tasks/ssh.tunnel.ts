@@ -135,8 +135,19 @@ function explainError(raw: string): string {
 				'3. VPS 的 /etc/ssh/sshd_config 里 PubkeyAuthentication 被显式设成了 no（默认是 yes）'
 		);
 	}
-	if (/Host key verification failed/.test(raw)) {
-		return hint('主机指纹与已记录的不一致。如果 VPS 重装过或换过密钥，请重新获取并确认指纹。');
+	/**
+	 * 「本机没有这个主机的记录」和「记录与实测不一致」要分开说。
+	 *
+	 * 前者是还没确认过指纹（或 known_hosts 没被读到），后者才是 VPS 换了密钥。
+	 * 混成一句话会让用户对着本就没问题的指纹反复重新确认。
+	 */
+	if (/No .* host key is known/i.test(raw)) {
+		return hint(
+			'本机没有该主机的密钥记录。请在设置页点「获取主机指纹」，与 VPS 上 ssh-keygen -lf 的结果核对一致后，再点「确认并连接」。'
+		);
+	}
+	if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(raw)) {
+		return hint('主机密钥与已记录的不一致。如果 VPS 重装过或换过密钥，请重新获取并确认指纹。');
 	}
 	if (/Connection refused/i.test(raw)) {
 		return hint('连接被拒绝。通常是 SSH 端口填错了（很多服务器不是 22），或 sshd 没在运行。');
@@ -328,8 +339,13 @@ function buildArgs(config: SshTunnelConfig, keyPath: string, apiPort: number): s
 		'IdentitiesOnly=yes',
 		'-o',
 		'StrictHostKeyChecking=yes',
+		// 路径必须加双引号：ssh 解析 -o Key=Value 时会在**空格处截断值**，
+		// 而 userData 目录名（"OCS Desktop"）带空格，不加引号 ssh 会拿到一个
+		// 被截断的路径、读不到文件，然后报
+		// "No ED25519 host key is known ... strict checking" 并拒绝连接。
+		// 实测：裸路径 ✗、加双引号 ✓、反斜杠转义 ✗。
 		'-o',
-		`UserKnownHostsFile=${knownHostsPath()}`,
+		`UserKnownHostsFile="${knownHostsPath()}"`,
 		// 转发建不起来时必须退出，否则会出现"进程活着但隧道不通"这种最难查的状态
 		'-o',
 		'ExitOnForwardFailure=yes',
