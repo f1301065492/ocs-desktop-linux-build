@@ -91,47 +91,13 @@ jobs:
           git push origin "HEAD:${{ github.ref_name }}"
           git push origin "v${{ steps.bump.outputs.version }}"
 
-  build:
+  build-and-publish:
     needs: prepare
-    # 必须把新 tag 传进去：prepare 刚推了新提交，而可复用 workflow 默认会 checkout
-    # 调用方的旧 commit，那样构建出来的产物版本号是错的
+    # 两个入参都必须传：
+    # - ref：prepare 刚推了新提交，可复用 workflow 默认会 checkout 调用方的旧 commit，
+    #   不传就会构建出错误版本号的产物
+    # - release-tag：让它直接把产物传到 Release，绕开有配额的 Actions artifacts
     uses: ./.github/workflows/build-linux-appimage.yml
     with:
       ref: ${{ needs.prepare.outputs.tag }}
-
-  publish:
-    needs: [prepare, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out Git repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.tag }}
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: 创建 Release 并上传产物
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          TAG="${{ needs.prepare.outputs.tag }}"
-          echo "产物列表:"
-          ls -lh artifacts/
-
-          # tag 已由 prepare 创建；这里只补 Release。已存在时不报错，便于重跑
-          gh release create "$TAG" --title "$TAG" --generate-notes || true
-
-          # 只传安装包，跳过 actions 可能顺带收集的中间文件
-          for f in artifacts/*.AppImage artifacts/*.deb; do
-            [ -f "$f" ] || continue
-            echo "上传: $f"
-            gh release upload "$TAG" "$f" --clobber
-          done
-
-          echo ""
-          echo "Release 地址: https://github.com/${{ github.repository }}/releases/tag/$TAG"
+      release-tag: ${{ needs.prepare.outputs.tag }}

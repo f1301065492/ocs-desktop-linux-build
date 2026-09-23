@@ -15,6 +15,15 @@ on:
           否则会被复用成调用方的旧 commit，构建出错误版本号的产物
         type: string
         required: false
+      release-tag:
+        description: 传了就直接把产物传到该 tag 的 Release，不走 Actions artifact。
+          发布流程用这个——artifacts 有存储配额（免费账户私有仓库 500MB），
+          而安装包单个就有 500MB，走 artifacts 等于存两份还必然超配额
+        type: string
+        required: false
+
+permissions:
+  contents: write
 
 jobs:
   build-linux-appimage:
@@ -59,7 +68,31 @@ jobs:
           PLATFORM: linux
           ARCH: x64
 
-      - name: Upload Linux packages
+      # 发布流程：直接传到 Release。不经过 Actions artifact——
+      # 那边有存储配额（免费账户私有仓库 500MB），而单个安装包就 500MB，
+      # 走 artifacts 既存两份又必然超配额
+      - name: Upload to Release
+        if: inputs.release-tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${{ inputs.release-tag }}"
+          ls -lh packages/app/dist/*.AppImage packages/app/dist/*.deb
+
+          # tag 由发布流程的上游 job 创建；这里只补 Release，已存在时不报错
+          gh release create "$TAG" --title "$TAG" --generate-notes || true
+
+          gh release upload "$TAG" \
+            packages/app/dist/*.AppImage \
+            packages/app/dist/*.deb \
+            --clobber
+
+          echo "已发布: https://github.com/${{ github.repository }}/releases/tag/$TAG"
+
+      # 临时出包（workflow_dispatch）：产物只进 Actions artifacts 供手动下载
+      - name: Upload as artifact
+        if: inputs.release-tag == ''
         uses: actions/upload-artifact@v4
         with:
           name: ocs-${{ env.VERSION }}-linux-x64
