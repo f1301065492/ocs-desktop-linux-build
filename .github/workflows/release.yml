@@ -5,21 +5,28 @@ name: Release
 # 刻意不做成 push 触发：推代码与发版是两件事，纯文档/CI 改动不该占版本号，
 # 也不该出现「推了三次涨了三个版本但一次都没发」。
 #
+# ⚠️ 版本号规则（用户 2026-09-23 定的）：**只顺延第三位**。
+# 前两位（major.minor）只能在用户明确要求时才动，不能由提交内容自动决定。
+# 所以这里没有「有 feat 就升 minor」的自动判定——那正是 v2.14.0 那次
+# 误升 minor 的原因（范围内有个 feat 提交），事后只能把 tag 与 Release 全删掉重发。
+# minor / major 仍然保留为选项，但必须有人**显式选择**才会生效。
+#
 # 怎么触发：
-#   gh workflow run release.yml --repo <owner>/<repo> --field bump=auto
+#   gh workflow run release.yml --repo <owner>/<repo>            # 默认 patch
+#   gh workflow run release.yml --repo <owner>/<repo> --field bump=patch
 # 或在 GitHub 的 Actions 页面点 Run workflow。
+# 注意：已移除 `auto` 选项，传它会被 GitHub 以 422 拒绝（而不是悄悄当 patch）。
 on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "版本递增类型。auto 会按提交内容判断：有 feat 则 minor，否则 patch"
+        description: "递增第几位。默认 patch（只动第三位）；minor/major 需显式选择"
         type: choice
         options:
-          - auto
           - patch
           - minor
           - major
-        default: auto
+        default: patch
 
 permissions:
   contents: write
@@ -33,9 +40,6 @@ jobs:
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
-        with:
-          # 要读历史才能按提交内容判断递增类型
-          fetch-depth: 0
 
       - name: 计算并写入新版本号
         id: bump
@@ -45,22 +49,7 @@ jobs:
           echo "当前版本: $CURRENT"
 
           BUMP="${{ inputs.bump }}"
-          if [ "$BUMP" = "auto" ]; then
-            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-            if [ -n "$LAST_TAG" ]; then
-              RANGE="$LAST_TAG..HEAD"
-              echo "统计范围: $LAST_TAG..HEAD"
-            else
-              RANGE="HEAD"
-              echo "还没有任何 tag，统计全部提交"
-            fi
-            if git log "$RANGE" --pretty=%s | grep -qE '^feat(\(.+\))?!?:'; then
-              BUMP=minor
-            else
-              BUMP=patch
-            fi
-            echo "自动判定递增类型: $BUMP"
-          fi
+          echo "递增类型: $BUMP（用户指定的显式值，不再按提交内容自动判断）"
 
           NEXT=$(node -e "
             const [maj, min, pat] = '$CURRENT'.split('.').map(Number);
