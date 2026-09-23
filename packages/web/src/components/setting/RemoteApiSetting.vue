@@ -23,9 +23,14 @@
 			</span>
 		</Description>
 
+		<!--
+			用本地副本 + v-model。Arco 的输入组件是受控的，只绑单向 :model-value
+			而不处理 update:modelValue 的话，每次按键后显示值会被 prop 覆盖回去，
+			表现为「打不进字」。
+		-->
 		<Description label="监听端口">
 			<a-input-number
-				:model-value="state.status?.port"
+				v-model="state.tempPort"
 				:min="1024"
 				:max="65535"
 				:disabled="!state.status?.enabled"
@@ -169,6 +174,7 @@ import { Message } from '@arco-design/web-vue';
 import Description from '../Description.vue';
 import Icon from '../Icon.vue';
 import { remote } from '../../utils/remote';
+import { remoteApiState } from './remote-api.state';
 
 interface RemoteApiStatus {
 	enabled: boolean;
@@ -188,11 +194,18 @@ const state = reactive({
 	/** 新生成的密钥明文，只在本次会话里短暂保留 */
 	freshKey: '',
 	/** 配置变更进行中（重启服务可能要 1~3 秒，首次生成证书更久） */
-	saving: false
+	saving: false,
+	/** 端口输入框的本地编辑副本，见模板里的说明 */
+	tempPort: 15320 as number | undefined
 });
 
 function applyStatus(next: RemoteApiStatus) {
 	state.status = next;
+	state.tempPort = next.port;
+	// 同步给「SSH 反向隧道」那张卡片。它要在 API 未开启时给提示，
+	// 如果各自缓存一份，用户在下面那张卡片上方开启 API 后它就一直是旧值
+	remoteApiState.enabled = Boolean(next && next.enabled);
+	remoteApiState.loaded = true;
 }
 
 async function loadStatus() {

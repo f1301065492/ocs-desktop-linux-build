@@ -13,7 +13,7 @@
 		</a-alert>
 
 		<a-alert
-			v-if="!apiEnabled"
+			v-if="!remoteApiState.enabled"
 			type="warning"
 			class="mb-3"
 		>
@@ -40,9 +40,15 @@
 			/>
 		</Description>
 
+		<!--
+			三个输入框都用本地副本 + v-model。
+			Arco 的输入组件是受控的：显示值完全由 modelValue 决定，
+			只绑单向 :model-value 而不处理 update:modelValue 的话，
+			每次按键后显示值会被 prop 立刻覆盖回去，表现为「打不进字」。
+		-->
 		<Description label="VPS 地址">
 			<a-input
-				:model-value="state.status?.config.host"
+				v-model="state.tempHost"
 				placeholder="公网 IP 或域名"
 				:style="{ width: '240px' }"
 				@change="onHostChange"
@@ -51,7 +57,7 @@
 
 		<Description label="SSH 端口">
 			<a-input-number
-				:model-value="state.status?.config.port"
+				v-model="state.tempPort"
 				:min="1"
 				:max="65535"
 				:style="{ width: '160px' }"
@@ -62,7 +68,7 @@
 
 		<Description label="SSH 用户名">
 			<a-input
-				:model-value="state.status?.config.user"
+				v-model="state.tempUser"
 				placeholder="用于登录 VPS 的用户"
 				:style="{ width: '240px' }"
 				@change="onUserChange"
@@ -212,13 +218,15 @@ chmod 600 ~/.ssh/authorized_keys</pre
 				>
 					重新连接
 				</a-button>
-				<span
-					v-if="state.status?.keyPath"
-					class="text-secondary fingerprint"
-				>
-					私钥位置：{{ state.status.keyPath }}
-				</span>
+				<span class="text-secondary hint"> 修改地址 / 端口 / 用户名后需点「重新连接」才会生效 </span>
 			</a-space>
+		</Description>
+
+		<Description
+			v-if="state.status?.keyPath"
+			label="私钥位置"
+		>
+			<span class="text-secondary fingerprint">{{ state.status.keyPath }}</span>
 		</Description>
 	</a-card>
 </template>
@@ -228,6 +236,7 @@ import { computed, onMounted, reactive } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import Description from '../Description.vue';
 import { remote } from '../../utils/remote';
+import { remoteApiState, refreshRemoteApiState } from './remote-api.state';
 
 interface SshTunnelConfigView {
 	enabled: boolean;
@@ -256,7 +265,10 @@ const state = reactive({
 	scannedFingerprint: '',
 	saving: false,
 	scanning: false,
-	apiEnabled: false
+	/** 输入框的本地编辑副本，见模板里的说明 */
+	tempHost: '',
+	tempPort: 22 as number | undefined,
+	tempUser: ''
 });
 
 const stateColor = computed(() => {
@@ -283,20 +295,29 @@ function formatUptime(ms: number) {
 
 function applyStatus(next: SshTunnelStatus) {
 	state.status = next;
+	// 用服务端的最新值刷新编辑副本。保存失败时 apply() 会回读状态，
+	// 于是输入框会自动退回真实值，不会停留在用户以为改成功的内容上
+	state.tempHost = next.config.host;
+	state.tempPort = next.config.port;
+	state.tempUser = next.config.user;
+	state.scannedFingerprint = '';
 }
 
 async function loadStatus() {
 	try {
 		applyStatus(await remote.methods.call('sshTunnelGetStatus'));
-		// 远程 API 没开时给个提示——隧道指向一个没开的服务没有意义
-		const api = await remote.methods.call('remoteApiGetStatus');
-		state.apiEnabled = Boolean(api && api.enabled);
 	} catch (err) {
 		Message.error('读取隧道状态失败：' + String(err));
 	}
 }
 
-/** 统一的配置变更入口 */
+/**
+ * 统一的配置变更入口。
+ *
+ * 只有重启（enabled 变化、或用户点重新连接）才动隧道进程；
+ * 改地址/端口/用户名只保存不重启——那些字段是逐个填的，
+ * 每敲完一格就重连一次不仅浪费，还会在填写途中刷出一堆连接错误。
+ */
 async function apply(patch: Record<string, unknown>) {
 	state.saving = true;
 	try {
@@ -310,8 +331,10 @@ async function apply(patch: Record<string, unknown>) {
 	}
 }
 
-function onToggleEnabled(value: string | number | boolean) {
-	apply({ enabled: Boolean(value) });
+/** 切换开关要立即生效，所以这里带重启 */
+async function onToggleEnabled(value: string | number | boolean) {
+	await apply({ enabled: Boolean(value) });
+	await restart();
 }
 
 function onHostChange(value: string) {
@@ -367,7 +390,6 @@ async function confirmFingerprint() {
 	state.saving = true;
 	try {
 		applyStatus(await remote.methods.call('sshTunnelConfirmHostKey'));
-		state.scannedFingerprint = '';
 		Message.success('已确认，正在连接');
 	} catch (err) {
 		Message.error('确认失败：' + String(err));
@@ -388,7 +410,12 @@ async function restart() {
 	}
 }
 
-onMounted(loadStatus);
+onMounted(async () => {
+	// 两张卡片的挂载顺序不保证，这里主动刷一次 API 状态兜底；
+	// 之后由「远程 API」卡片在每次状态变化时同步过来
+	await refreshRemoteApiState();
+	await loadStatus();
+});
 </script>
 
 <style scoped lang="less">
@@ -420,7 +447,8 @@ onMounted(loadStatus);
 	margin: 0;
 }
 
-.fingerprint {
+.fingerprint,
+.hint {
 	font-size: 12px;
 }
 </style>
