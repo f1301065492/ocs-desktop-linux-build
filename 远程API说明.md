@@ -838,9 +838,17 @@ curl -k -H "X-API-Key: $KEY" $BASE/api/v1/browsers/<uid> | jq '.data.status'
 2. 填 VPS 地址、SSH 端口（**注意未必是 22**）、用户名
 3. 点「获取主机指纹」→ 与 VPS 上 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
    的结果**核对一致**后，点「确认并连接」
-4. 在 VPS 上做两件事（设置页里有可展开的命令说明）：
-   - 开启公钥认证：`sudo sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config && sudo systemctl restart sshd`
-   - 把公钥追加进 `~/.ssh/authorized_keys`
+4. 在 VPS 上把公钥追加进 `~/.ssh/authorized_keys`（设置页里有可展开的命令说明）：
+
+   ```bash
+   mkdir -p ~/.ssh && chmod 700 ~/.ssh
+   echo '<把上面复制的公钥粘到这里>' >> ~/.ssh/authorized_keys
+   chmod 600 ~/.ssh/authorized_keys
+   ```
+
+   > OpenSSH **默认就允许公钥登录**，通常不需要改 sshd 配置。
+   > 只有当服务器被加固过、`PubkeyAuthentication` 被显式设成 `no` 时才需要处理：
+   > `grep -i '^PubkeyAuthentication' /etc/ssh/sshd_config`
 
 状态变成**运行中**就通了。之后：
 
@@ -969,16 +977,17 @@ sudo systemctl status ocs-tunnel
 - **`ExitOnForwardFailure=yes` 必须有。** 否则当 VPS 侧 15320 已被占用
   （比如上一次连接还没被回收）时，ssh 会**连上但不做端口转发**，
   `Restart=always` 永远不触发，你会看到一个"隧道进程活着但端口不通"的诡异状态
-- **必须用公钥认证。** 无人值守没法输密码。如果服务器的 sshd 只允许密码
-  （握手时会显示 `Permission denied (password)`——括号里**没有** `publickey` 就是这个情况），
-  需要先开公钥：
+- **必须用公钥认证。** 无人值守没法输密码。OpenSSH 默认允许公钥登录，
+  所以通常只要把公钥装进 `authorized_keys` 就行。
 
-  ```bash
-  sudo sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
-  sudo systemctl restart sshd
-  ```
-
-  顺带一提，**只开密码、关掉公钥**既不便于自动化，也更容易被暴力破解，建议一并改掉。
+  > ⚠️ **别被 `Permission denied (password)` 误导。** 括号里列的是**本次连接
+  > 实际尝试过的方式**，不是服务端支持的方式——本机没有可提供的密钥时也会
+  > 只报 password，而服务端其实支持公钥。
+  > 想知道服务端到底支持什么，用：
+  > ```bash
+  > ssh -v -o BatchMode=yes -p <端口> <用户>@<主机> 2>&1 | grep "Authentications that can continue"
+  > # 输出 publickey,password 说明公钥可用
+  > ```
 
 ---
 

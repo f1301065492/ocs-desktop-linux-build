@@ -106,26 +106,34 @@ function isPermanentFailure(raw: string): boolean {
 /**
  * 把 ssh 的原始报错翻译成可操作的提示。
  *
- * ssh 的输出对使用者不友好——`Permission denied (password)` 这种，
- * 不懂 SSH 的人看不出「要去服务器上开公钥认证」。这里把最常见的几种
- * 失败模式识别出来，直接给出去哪改、改什么。
- *
- * 原始输出仍然附在末尾，供懂行的人排查。
+ * ssh 的输出对使用者不友好，而且容易误读。这里把最常见的几种失败模式
+ * 识别出来，直接给出去哪改、改什么。原始输出仍附在末尾供懂行的人排查。
  */
 function explainError(raw: string): string {
 	const hint = (text: string) => `${text}\n\n原始错误：${raw}`;
 
-	// 括号里没有 publickey 说明服务端根本没开公钥认证
-	if (/Permission denied \(password\)/.test(raw) && !/publickey/.test(raw)) {
+	if (/Permission denied \(publickey/.test(raw)) {
 		return hint(
-			'目标服务器只允许密码登录，尚未开启公钥认证。\n' +
-				'请在 VPS 上执行：\n' +
-				"  sudo sed -i 's/^#\\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config\n" +
-				'  sudo systemctl restart sshd'
+			'公钥被拒绝。请确认：\n' +
+				'1. 本机公钥已追加进 VPS 的 ~/.ssh/authorized_keys\n' +
+				'2. 该文件权限为 600、~/.ssh 目录权限为 700\n' +
+				'3. 追加时没有换行错位（公钥必须是一整行）'
 		);
 	}
-	if (/Permission denied \(publickey/.test(raw)) {
-		return hint('公钥被拒绝。请确认已把本机公钥写入 VPS 的 ~/.ssh/authorized_keys，且权限为 600。');
+	/**
+	 * 括号里**没有** publickey 时的通用提示。
+	 *
+	 * 注意别把这里断言成「服务端禁用了公钥认证」——括号里列的是本次连接
+	 * 实际尝试过的方式，不是服务端支持的方式。本机没有可提供的密钥时也会
+	 * 只报 password，但服务端其实是支持公钥的。这里只列可能原因，不下结论。
+	 */
+	if (/Permission denied/.test(raw)) {
+		return hint(
+			'认证失败。可能的原因：\n' +
+				'1. 公钥尚未写入 VPS 的 ~/.ssh/authorized_keys\n' +
+				'2. 私钥文件不可读或已损坏\n' +
+				'3. VPS 的 /etc/ssh/sshd_config 里 PubkeyAuthentication 被显式设成了 no（默认是 yes）'
+		);
 	}
 	if (/Host key verification failed/.test(raw)) {
 		return hint('主机指纹与已记录的不一致。如果 VPS 重装过或换过密钥，请重新获取并确认指纹。');

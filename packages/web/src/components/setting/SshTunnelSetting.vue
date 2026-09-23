@@ -127,19 +127,22 @@
 			<a-collapse-item header="在 VPS 上要做的两步（点开查看命令）">
 				<div class="guide">
 					<p>
-						<strong>第一步：确认 VPS 允许公钥登录。</strong>很多服务器默认只开密码认证，
-						这时隧道会以「认证失败」告终。在该 VPS 上执行：
+						<strong>第一步：把上面那行公钥写进 VPS 的 authorized_keys。</strong>
+						公钥必须是一整行，复制粘贴时别让它断开。
 					</p>
-					<pre>
-sudo sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
-sudo systemctl restart sshd</pre
-					>
-
-					<p><strong>第二步：把上面那行公钥写进 VPS 的 authorized_keys。</strong></p>
 					<pre>
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 echo '&lt;把上面复制的公钥粘到这里&gt;' >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys</pre
+					>
+
+					<p class="text-secondary">
+						第二步（通常不用做）：OpenSSH 默认就允许公钥登录。只有当 VPS 被加固过、 sshd_config 里显式写了
+						<code>PubkeyAuthentication no</code> 时才需要改：
+					</p>
+					<pre>
+grep -i '^PubkeyAuthentication' /etc/ssh/sshd_config
+# 输出为 no 才需要改成 yes，然后 sudo systemctl restart sshd</pre
 					>
 
 					<p class="text-secondary">
