@@ -45,7 +45,7 @@
 		]
 	},
 	"linux": {
-		"icon": "public/favicon.png",
+		"icon": "build/icons",
 		"artifactName": "ocs-${version}-setup-${os}-${arch}.${ext}",
 		"target": [
 			{
