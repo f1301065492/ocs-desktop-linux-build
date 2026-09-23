@@ -82,6 +82,13 @@
 					<div class="key-box">
 						<code>{{ state.status.publicKey }}</code>
 					</div>
+					<div
+						v-if="state.status.publicKeyFingerprint"
+						class="mt-1 text-secondary fingerprint"
+					>
+						指纹 {{ state.status.publicKeyFingerprint }} —— 可在 VPS 上用
+						<code>ssh-keygen -lf ~/.ssh/authorized_keys</code> 核对装的是不是这一把
+					</div>
 					<a-space class="mt-2">
 						<a-button
 							size="small"
@@ -118,6 +125,26 @@
 				</div>
 			</div>
 		</Description>
+
+		<!--
+			密钥文件本身的问题。必须显眼：ssh 在这种状态下报的是
+			「contents do not match public」——一条完全看不出该改哪里的错误，
+			而正确做法就写在下面这张提示里。
+		-->
+		<a-alert
+			v-if="state.status?.keyIssue"
+			type="warning"
+			class="mb-3"
+		>
+			<template #title>密钥文件异常</template>
+			<div>
+				{{ state.status.keyIssue }}
+				<p class="text-secondary">
+					原话：ssh 会报 <code>identity_sign: private key ... contents do not match public</code>，
+					这是<strong>本机私钥与公钥文件对不上</strong>，与 VPS 上的配置无关。
+				</p>
+			</div>
+		</a-alert>
 
 		<!-- 引导：把公钥装上并开公钥认证 -->
 		<a-collapse
@@ -257,6 +284,9 @@ interface SshTunnelStatus {
 	stateText: string;
 	lastError: string | null;
 	publicKey: string | null;
+	publicKeyFingerprint: string | null;
+	/** 密钥文件有问题时的说明（如私钥与公钥不配对） */
+	keyIssue: string | null;
 	keyPath: string;
 	remotePort: number;
 	uptimeMs: number;

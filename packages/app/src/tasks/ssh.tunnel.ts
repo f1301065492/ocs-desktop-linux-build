@@ -1,5 +1,6 @@
 import { spawn, execFile, ChildProcess } from 'child_process';
 import { app } from 'electron';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import defaultsDeep from 'lodash/defaultsDeep';
@@ -99,7 +100,8 @@ function isPermanentFailure(raw: string): boolean {
 		/Host key verification failed/i.test(raw) ||
 		/Could not resolve hostname/i.test(raw) ||
 		/Too many authentication failures/i.test(raw) ||
-		/no such identity|Load key/i.test(raw)
+		/no such identity|Load key/i.test(raw) ||
+		/contents do not match public/i.test(raw)
 	);
 }
 
@@ -112,6 +114,20 @@ function isPermanentFailure(raw: string): boolean {
 function explainError(raw: string): string {
 	const hint = (text: string) => `${text}\n\n原始错误：${raw}`;
 
+	/**
+	 * 这一条必须排在最前面判断。
+	 *
+	 * 它的原始输出里**同时**包含 `Permission denied (publickey...)`——那是它导致的后果，
+	 * 而不是原因。若按下面的顺序落到「公钥被拒绝」那一支，用户会去 VPS 上反复检查
+	 * authorized_keys，而真正的问题在本机的两个密钥文件之间。
+	 */
+	if (/contents do not match public/i.test(raw)) {
+		return hint(
+			'本机的私钥与公钥文件不是同一把钥匙，ssh 因此拒绝用它认证。\n' +
+				'软件会在每次连接前按私钥自动重写公钥文件；请点「重新连接」，\n' +
+				'然后把设置页显示的「本机公钥」重新追加到 VPS 的 authorized_keys（旧的那行可以删掉）。'
+		);
+	}
 	if (/Permission denied \(publickey/.test(raw)) {
 		return hint(
 			'公钥被拒绝。请确认：\n' +
@@ -202,6 +218,116 @@ export interface KeyPairInfo {
 	keyPath: string;
 	publicKey: string;
 	created: boolean;
+	/** 公钥文件与私钥不是同一把钥匙，已被按私钥重写 */
+	repaired: boolean;
+	/** 公钥指纹（`SHA256:...`），可与 VPS 上 `ssh-keygen -lf ~/.ssh/authorized_keys` 对照 */
+	fingerprint: string | null;
+}
+
+/** 密钥文件有问题时的说明，设置页直接展示；一切正常时为 null */
+let keyIssue: string | null = null;
+
+/** 公钥行的「类型 + 密钥体」，比对时忽略尾部注释（注释可以随便改，不参与等价判断） */
+function keyMaterial(publicKey: string): string {
+	return publicKey.trim().split(/\s+/).slice(0, 2).join(' ');
+}
+
+/**
+ * 公钥指纹，算法与 `ssh-keygen -lf` 完全一致：
+ * 对 base64 解码后的密钥体做 SHA256，再 base64（去掉 `=` 填充）并加上 `SHA256:` 前缀。
+ *
+ * 自己算而不是调 ssh-keygen，是为了让同步的状态查询也能带上指纹。
+ */
+export function keyFingerprint(publicKey: string | null): string | null {
+	if (!publicKey) return null;
+	const parts = publicKey.trim().split(/\s+/);
+	if (parts.length < 2) return null;
+	try {
+		const digest = crypto.createHash('sha256').update(Buffer.from(parts[1], 'base64')).digest('base64');
+		return `SHA256:${digest.replace(/=+$/, '')}`;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * 从私钥推导公钥（不含注释）。
+ *
+ * `-P ''` 必须带：私钥若设了密码短语，不带它 ssh-keygen 会去交互要密码，
+ * 而无人值守场景没有输入源，只会把流程挂到超时。
+ */
+async function derivePublicKey(keyPath: string): Promise<string> {
+	const { stdout, stderr, code } = await run('ssh-keygen', ['-y', '-P', '', '-f', keyPath], 8000);
+	const derived = stdout.trim();
+	if (code !== 0 || !derived) {
+		throw new Error(stderr.trim() || `退出码 ${code}`);
+	}
+	return derived;
+}
+
+/**
+ * 校验「私钥 ↔ 公钥」是否配对，不配对就**按私钥重写公钥文件**。
+ *
+ * 为什么必须做：ssh 用 `-i` 指向私钥时，会优先读取**同名的 `.pub`**、把这个公钥
+ * 报给服务器；服务器认可之后，才用私钥签名。两者不是同一把钥匙时 ssh 直接拒绝：
+ *
+ *     identity_sign: private key /path/id_ed25519 contents do not match public
+ *
+ * 这条报错看不出该改哪里，而真实原因可能只是某一刻 `.pub` 与私钥被分别写坏了
+ * （例如两把钥匙的文件混在了一起）。以私钥为准重写公钥即可恢复——私钥是唯一的，
+ * 丢了就等于换了把钥匙；公钥只是它的派生物，随时可以重算。
+ *
+ * @returns 是否发生了重写
+ */
+async function verifyKeyPair(keyPath: string): Promise<boolean> {
+	const pubPath = `${keyPath}.pub`;
+	let derived: string;
+	try {
+		derived = await derivePublicKey(keyPath);
+	} catch (err) {
+		// 私钥读不出来：损坏，或者设了密码短语要靠 agent 提供。
+		// 这里**不阻断**连接——ssh 自己还有 agent / askpass 的路子能走通，
+		// 只把问题摆到设置页上让人知道。
+		keyIssue = `私钥无法读取：${
+			err instanceof Error ? err.message : String(err)
+		}。若这把私钥设了密码短语，无人值守下没法输入，请改用软件生成的密钥。`;
+		return false;
+	}
+
+	const current = fs.existsSync(pubPath) ? fs.readFileSync(pubPath, 'utf8').trim() : '';
+	if (current && keyMaterial(current) === keyMaterial(derived)) {
+		keyIssue = null;
+		return false;
+	}
+
+	/**
+	 * 注释（公钥行最后那段）的取舍：优先沿用私钥里带的那个，
+	 * 其次沿用原公钥文件里的，都没有才用默认值。
+	 *
+	 * 有些 OpenSSH 版本的 `ssh-keygen -y` 会把注释一起打出来（实测 Windows 版会），
+	 * 直接拼字符串就会得到 `... ocs-desktop ocs-desktop`。
+	 */
+	const derivedParts = derived.split(/\s+/);
+	const comment = derivedParts[2] || current.split(/\s+/)[2] || 'ocs-desktop';
+	fs.writeFileSync(pubPath, `${derivedParts[0]} ${derivedParts[1]} ${comment}\n`, { mode: 0o644 });
+	keyIssue = current
+		? '公钥文件与私钥不是同一把钥匙。已按私钥重算并覆盖公钥文件——VPS 的 authorized_keys 里装的很可能正是被覆盖的那个旧公钥，请把下面显示的「本机公钥」重新追加一次。'
+		: '公钥文件缺失，已按私钥重新生成。请确认 VPS 的 authorized_keys 里装的就是下面这行公钥。';
+	// 两个指纹都记进日志：这是「哪把钥匙在哪」这类问题唯一的线索
+	logger.warn(
+		`公钥文件与私钥不一致，已按私钥重写: ${pubPath}（旧公钥 ${keyFingerprint(current) ?? '无法解析'} → 新公钥 ${
+			keyFingerprint(derived) ?? '无法解析'
+		}）`
+	);
+	return true;
+}
+
+function readPublicKeyFile(pubPath: string): string {
+	try {
+		return fs.readFileSync(pubPath, 'utf8').trim();
+	} catch {
+		return '';
+	}
 }
 
 /**
@@ -222,6 +348,7 @@ export async function ensureKeyPair(force = false): Promise<KeyPairInfo> {
 		}
 	}
 
+	let created = false;
 	if (!fs.existsSync(keyPath) || !fs.existsSync(pubPath)) {
 		const { stderr, code } = await run('ssh-keygen', [
 			'-t',
@@ -243,16 +370,35 @@ export async function ensureKeyPair(force = false): Promise<KeyPairInfo> {
 			// Windows 上 chmod 基本无效，忽略
 		}
 		logger.info(`已生成 SSH 密钥: ${keyPath}`);
-		return { keyPath, publicKey: fs.readFileSync(pubPath, 'utf8').trim(), created: true };
+		created = true;
 	}
 
-	return { keyPath, publicKey: fs.readFileSync(pubPath, 'utf8').trim(), created: false };
+	// 生成完也要校验一遍：ssh-keygen 若只写坏了其中一半（磁盘满、被中断），
+	// 下一次连接就会以那句看不懂的 mismatch 报错收场
+	const repaired = await verifyKeyPair(keyPath);
+	const publicKey = readPublicKeyFile(pubPath);
+
+	return { keyPath, publicKey, created, repaired, fingerprint: keyFingerprint(publicKey) };
+}
+
+/**
+ * 读取状态前先做一次密钥配对校验。
+ *
+ * 设置页每次刷新状态都会走到这里，于是「公钥文件是坏的」这件事会在用户**复制公钥之前**
+ * 就被发现并修好——否则用户复制的正是那个坏掉的公钥，装到 VPS 上又是一轮排查。
+ */
+export async function ensureKeyHealthy(): Promise<void> {
+	const keyPath = resolveKeyPath(getSshTunnelConfig());
+	if (!fs.existsSync(keyPath)) {
+		keyIssue = null;
+		return;
+	}
+	await verifyKeyPair(keyPath);
 }
 
 /** 读取公钥内容（不生成）。没生成过则返回 null */
 export function readPublicKey(): string | null {
-	const pubPath = `${resolveKeyPath(getSshTunnelConfig())}.pub`;
-	return fs.existsSync(pubPath) ? fs.readFileSync(pubPath, 'utf8').trim() : null;
+	return readPublicKeyFile(`${resolveKeyPath(getSshTunnelConfig())}.pub`) || null;
 }
 
 // ── 主机密钥 ──
@@ -479,6 +625,9 @@ export async function startTunnel(): Promise<void> {
 	}
 
 	try {
+		// 连接前把「私钥 ↔ 公钥」理一致。放在这里而不是 spawnTunnel 里，
+		// 因为要跑 ssh-keygen，是异步操作
+		await verifyKeyPair(resolveKeyPath(config));
 		restartAttempt = 0;
 		spawnTunnel();
 	} catch (err) {
@@ -527,6 +676,10 @@ export interface SshTunnelStatus {
 	lastError: string | null;
 	/** 已生成的公钥，供设置页展示与复制 */
 	publicKey: string | null;
+	/** 公钥指纹，可与 VPS 上 `ssh-keygen -lf ~/.ssh/authorized_keys` 的输出对照 */
+	publicKeyFingerprint: string | null;
+	/** 密钥文件的问题（如私钥与公钥不配对），没有问题时为 null */
+	keyIssue: string | null;
 	keyPath: string;
 	/** 隧道映射的远端端口 */
 	remotePort: number;
@@ -544,12 +697,15 @@ const STATE_TEXT: Record<SshTunnelState, string> = {
 
 /** 只回传可展示信息，密钥内容以外不暴露任何路径以外的细节 */
 export function getSshTunnelStatus(): SshTunnelStatus {
+	const publicKey = readPublicKey();
 	return {
 		config: getSshTunnelConfig(),
 		state,
 		stateText: STATE_TEXT[state],
 		lastError,
-		publicKey: readPublicKey(),
+		publicKey,
+		publicKeyFingerprint: keyFingerprint(publicKey),
+		keyIssue,
 		keyPath: resolveKeyPath(getSshTunnelConfig()),
 		remotePort: store.store.remoteApi?.port ?? 15320,
 		uptimeMs: state === 'running' && startedAt ? Date.now() - startedAt : 0

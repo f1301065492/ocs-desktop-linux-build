@@ -866,6 +866,39 @@ curl -k -H "X-API-Key: $KEY" $BASE/api/v1/browsers/<uid> | jq '.data.status'
 > 隧道只支持公钥认证，不支持密码。密码要么落盘、要么经 `sshpass`
 > 暴露在进程参数里，两者都比密钥差。
 
+#### 排错：`contents do not match public`
+
+如果隧道报出这一行（后面通常跟着 `Permission denied (publickey,password)`）：
+
+```
+identity_sign: private key /home/xxx/.config/OCS Desktop/ssh-tunnel/id_ed25519 contents do not match public
+```
+
+**这是本机的私钥与公钥文件不是同一把钥匙**，与 VPS 上的配置无关，
+去 VPS 上反复检查 `authorized_keys` 是白费功夫。
+
+原理：`ssh -i <私钥>` 时，ssh 会优先读取**同名的 `.pub`** 并把这个公钥报给服务器；
+服务器认可之后才用私钥签名。两者对不上，ssh 就拒绝使用这把钥匙。
+
+软件在**每次读状态、每次连接之前**都会校验一遍，不配对就按私钥重写公钥文件
+（私钥是唯一的，丢了等于换钥匙；公钥只是它的派生物，随时能重算），
+并在设置页显示「密钥文件异常」提示。此时**把设置页重新显示出来的公钥再追加一次到
+`~/.ssh/authorized_keys`** 即可（旧的那行可以删掉）——因为 VPS 上装的多半正是被覆盖掉的旧公钥。
+
+想自己确认，在 OCS 机器上跑：
+
+```bash
+cd ~/.config/OCS\ Desktop/ssh-tunnel
+ssh-keygen -y -f id_ed25519      # 从私钥推出的公钥
+cat id_ed25519.pub               # 文件里的公钥
+```
+
+两行不一致就是这个错。手工修法就是用前者覆盖后者：
+`ssh-keygen -y -f id_ed25519 > id_ed25519.pub`
+
+设置页会显示**公钥指纹**，可与 VPS 上 `ssh-keygen -lf ~/.ssh/authorized_keys`
+的输出直接对照——这是判断「装的到底是哪一把钥匙」最快的办法。
+
 ### 方式二：手动配置（脚本化部署、或不想让软件碰 SSH 时用）
 
 下面几节是手工做法。适合要写进部署脚本、或者需要一台机器映射多台 OCS

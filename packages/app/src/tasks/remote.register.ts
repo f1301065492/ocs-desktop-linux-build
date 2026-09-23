@@ -23,6 +23,7 @@ import { clearApiKey, generateApiKey, setApiKey, updateRemoteApiConfig } from '.
 import { regenerateTlsMaterial } from './remote.api/tls';
 import {
 	confirmHostKey,
+	ensureKeyHealthy,
 	ensureKeyPair,
 	getSshTunnelStatus,
 	restartTunnel,
@@ -317,7 +318,16 @@ const methods = {
 
 	// ── SSH 反向隧道 ──
 
-	sshTunnelGetStatus: () => getSshTunnelStatus(),
+	/**
+	 * 读状态前先做一次密钥配对校验（异步，因为要跑 ssh-keygen）。
+	 *
+	 * 放在这里是为了让设置页**在用户复制公钥之前**就把坏掉的公钥文件修好：
+	 * 否则用户复制走的正是那个与私钥对不上的公钥，装到 VPS 上又是一轮白排查。
+	 */
+	sshTunnelGetStatus: async () => {
+		await ensureKeyHealthy();
+		return getSshTunnelStatus();
+	},
 	sshTunnelUpdateConfig: async (patch: any) => {
 		updateSshTunnelConfig(sanitizeSshTunnelPatch(patch) as any);
 		await restartTunnel();
