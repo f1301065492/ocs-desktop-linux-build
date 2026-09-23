@@ -1,15 +1,11 @@
 import { BrowserWindow, app, dialog } from 'electron';
 import path from 'path';
 import AdmZip from 'adm-zip';
-import axios from 'axios';
-import { createWriteStream, existsSync, mkdirSync } from 'fs';
-import { finished } from 'stream/promises';
 import { Logger } from '../logger';
 import xlsx from 'xlsx';
 import unzipper from 'unzipper';
 
 const taskLogger = Logger('task');
-const logger = Logger('utils');
 
 export async function task(name: string, func: any) {
 	const time = Date.now();
@@ -19,35 +15,13 @@ export async function task(name: string, func: any) {
 }
 
 /**
- * 下载文件
+ * 下载文件。
+ *
+ * 实现搬到了 ./download.ts，改用并行分片：GitHub Releases 在国内单连接
+ * 只有约 0.5 MB/s，实测 8 线程能到约 3.8 MB/s。服务端不支持 Range 时
+ * 会自动回退到原来的单流下载。签名保持不变，调用方无需改动。
  */
-export async function downloadFile(fileURL: string, outputURL: string, rateHandler: any) {
-	logger.info('downloadFile', fileURL, outputURL);
-
-	const { data, headers } = await axios.get(fileURL, {
-		responseType: 'stream'
-	});
-	const totalLength = parseInt(headers['content-length']);
-
-	let chunkLength = 0;
-	data.on('data', (chunk: any) => {
-		chunkLength += String(chunk).length;
-		const rate = ((chunkLength / totalLength) * 100).toFixed(2);
-		rateHandler(parseFloat(rate), totalLength, chunkLength);
-	});
-
-	// 创建文件夹
-	if (existsSync(path.dirname(outputURL)) === false) {
-		mkdirSync(path.dirname(outputURL), { recursive: true });
-	}
-
-	const writer = createWriteStream(outputURL);
-	data.pipe(writer);
-	await finished(writer);
-	rateHandler(100, totalLength, totalLength);
-
-	return outputURL;
-}
+export { downloadFile } from './download';
 
 /**
  * 压缩文件
