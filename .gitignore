@@ -143,7 +143,9 @@ dist/
 .yarn/install-state.gz
 .pnp.*
 
-# 本机的工作笔记：只留在本地，不进版本库、不推到 GitHub。
+# 本机的工作笔记与 AI 工作约定：只留在本地，不进版本库、不推到 GitHub。
 # 内容含服务器地址、面板信息与排障过程，没有让它们进入仓库的必要。
+# CLAUDE.md 是被 Claude Code 读取的项目指令文件，本地保留即可，无需上传。
 交接文件.md
 OCS网关待补接口.md
+CLAUDE.md
