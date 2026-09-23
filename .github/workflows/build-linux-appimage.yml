@@ -4,10 +4,27 @@ name: Build Linux AppImage
 # build.yml 的 matrix 会同时构建 win/mac/mac-arm64/linux 四个平台，耗时且没有必要。
 #
 # 两种触发方式：
-# - workflow_dispatch：临时出包，不涉及版本号，产物只进 Actions artifacts
+# - workflow_dispatch：手动出包，不涉及版本号
 # - workflow_call：由 release.yml 在发布流程里调用，产物随后会被挂到 Release 上
+#
+# 两条路的入参**必须保持一致**（下面两处重复声明是刻意的）：
+# 只把入参声明在 workflow_call 下的话，手动触发时传参会直接 422
+# （Unexpected inputs provided），于是「不发版、只按某个已有 tag 出包」这条
+# 路就走不通——而那正是补发/重发一个版本时需要的。
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 要构建的 ref（tag / 分支 / commit）。留空则构建触发它的那个 ref。
+          指定 tag 时务必填准，否则会构建出与预期版本号不符的产物
+        type: string
+        required: false
+      release-tag:
+        description: 传了就直接把产物传到该 tag 的 Release，不走 Actions artifact。
+          artifacts 有存储配额（免费账户私有仓库 500MB），而安装包单个就有 500MB，
+          走 artifacts 等于存两份还必然超配额
+        type: string
+        required: false
   workflow_call:
     inputs:
       ref:
