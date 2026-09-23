@@ -21,6 +21,14 @@ import { encryptRenderString, decryptRenderString } from '../crypto';
 import { attachRendererWindow, getRemoteApiStatus, restartRemoteApi } from './remote.api';
 import { clearApiKey, generateApiKey, setApiKey, updateRemoteApiConfig } from './remote.api/config';
 import { regenerateTlsMaterial } from './remote.api/tls';
+import {
+	confirmHostKey,
+	ensureKeyPair,
+	getSshTunnelStatus,
+	restartTunnel,
+	scanHostKey,
+	updateSshTunnelConfig
+} from './ssh.tunnel';
 
 export type RawAutomationScript = Pick<AutomationScript, 'configs' | 'name'>;
 
@@ -110,12 +118,71 @@ export function getMainWindow(): BrowserWindow | undefined {
 const REMOTE_API_BIND_ADDRESSES = ['0.0.0.0', '127.0.0.1'];
 
 /**
+ * SSH 隧道配置里允许渲染进程修改的字段。
+ *
+ * host 与 user 会被拼进 ssh 的参数，所以做字符白名单校验。
+ * 虽然用的是 spawn（参数数组、不经 shell），但形如 `-oProxyCommand=...`
+ * 的值仍可能被 ssh 当成选项解析，白名单能把这类值挡住。
+ */
+const SSH_TUNNEL_ALLOWED_KEYS = ['enabled', 'host', 'port', 'user', 'sshPath', 'keyPath'];
+// 主机名 / IPv4 / 不带方括号的 IPv6 都能过；刻意不放行方括号与等号，
+// 避免 `-oProxyCommand=...` 这类值被 ssh 当成选项解析
+const SSH_HOST_RE = /^[A-Za-z0-9._:]+$/;
+const SSH_USER_RE = /^[A-Za-z0-9._-]+$/;
+
+function sanitizeSshTunnelPatch(patch: any): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+	if (!patch || typeof patch !== 'object') {
+		return result;
+	}
+
+	for (const key of Object.keys(patch)) {
+		if (!SSH_TUNNEL_ALLOWED_KEYS.includes(key)) {
+			throw new Error(`不支持的字段: ${key}`);
+		}
+	}
+
+	if ('enabled' in patch) {
+		result.enabled = Boolean(patch.enabled);
+	}
+	if ('host' in patch) {
+		const host = String(patch.host ?? '').trim();
+		if (host && (!SSH_HOST_RE.test(host) || host.startsWith('-'))) {
+			throw new Error('主机地址含有非法字符');
+		}
+		result.host = host;
+	}
+	if ('port' in patch) {
+		const port = Number(patch.port);
+		if (!Number.isInteger(port) || port < 1 || port > 65535) {
+			throw new Error('SSH 端口必须是 1-65535 之间的整数');
+		}
+		result.port = port;
+	}
+	if ('user' in patch) {
+		const user = String(patch.user ?? '').trim();
+		if (user && (!SSH_USER_RE.test(user) || user.startsWith('-'))) {
+			throw new Error('用户名含有非法字符');
+		}
+		result.user = user;
+	}
+	if ('sshPath' in patch) {
+		result.sshPath = String(patch.sshPath ?? '').trim();
+	}
+	if ('keyPath' in patch) {
+		result.keyPath = String(patch.keyPath ?? '').trim();
+	}
+
+	return result;
+}
+
+/**
  * 只有主进程会写入的 store 顶层键。
  *
  * 渲染进程在启动时读到的是快照，并在每次保存时把整个 store 回传，
  * 所以这些键必须在 saveStore 里被保护，否则运行期由主进程写入的值会被快照覆盖。
  */
-const MAIN_PROCESS_OWNED_KEYS = ['remoteApi', 'remoteApiRunning'] as const;
+const MAIN_PROCESS_OWNED_KEYS = ['remoteApi', 'remoteApiRunning', 'sshTunnel'] as const;
 
 /** 白名单式地构造远程 API 配置补丁，绝不让渲染进程直接写 keyHash / keySalt 等字段 */
 function sanitizeRemoteApiPatch(patch: any): Record<string, unknown> {
@@ -246,6 +313,35 @@ const methods = {
 		await regenerateTlsMaterial();
 		await restartRemoteApi();
 		return getRemoteApiStatus();
+	},
+
+	// ── SSH 反向隧道 ──
+
+	sshTunnelGetStatus: () => getSshTunnelStatus(),
+	sshTunnelUpdateConfig: async (patch: any) => {
+		updateSshTunnelConfig(sanitizeSshTunnelPatch(patch) as any);
+		await restartTunnel();
+		return getSshTunnelStatus();
+	},
+	/** 生成密钥。force=true 时重新生成——调用方需要先确认，旧的公钥会失效 */
+	sshTunnelGenerateKey: async (force?: boolean) => {
+		const info = await ensureKeyPair(Boolean(force));
+		// 注意：重新生成的是**我们自己的**密钥，主机指纹是对方的，
+		// 两者无关，所以不动 confirmedFingerprint。
+		// 但换了新公钥后必须去 VPS 更新 authorized_keys，界面要提示。
+		await restartTunnel();
+		return { ...info, status: getSshTunnelStatus() };
+	},
+	/** 扫描目标主机公钥并算指纹，供用户确认（此时不建立隧道） */
+	sshTunnelScanHostKey: async () => scanHostKey(),
+	/** 用户确认指纹后写入自带的 known_hosts 并启动隧道 */
+	sshTunnelConfirmHostKey: async () => {
+		await confirmHostKey();
+		return getSshTunnelStatus();
+	},
+	sshTunnelRestart: async () => {
+		await restartTunnel();
+		return getSshTunnelStatus();
 	}
 };
 

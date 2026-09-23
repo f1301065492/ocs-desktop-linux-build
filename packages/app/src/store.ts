@@ -73,6 +73,29 @@ export const OriginalAppStore = {
 	remoteApiRunning: {
 		uids: [] as string[]
 	},
+	/**
+	 * SSH 反向隧道配置。
+	 *
+	 * 用途：OCS 跑在没有公网 IP 的内网，而调用方在公网 VPS 上。
+	 * 由本机主动连出去，把远程 API 的端口映射到 VPS 的回环地址。
+	 *
+	 * 私钥与 known_hosts 都放在应用数据目录的 ssh-tunnel/ 下，不碰用户的 ~/.ssh。
+	 * 同样受 MAIN_PROCESS_OWNED_KEYS 保护（渲染进程的 store 是快照，会把它覆盖掉）。
+	 */
+	sshTunnel: {
+		enabled: false,
+		/** VPS 地址 */
+		host: '',
+		/** SSH 端口，注意未必是 22 */
+		port: 22,
+		user: '',
+		/** 留空则用 PATH 中的 ssh */
+		sshPath: '',
+		/** 留空则用 <userData>/ssh-tunnel/id_ed25519 */
+		keyPath: '',
+		/** 用户已确认过的主机指纹；为空表示还没确认，此时不启动隧道 */
+		confirmedFingerprint: ''
+	},
 	/** 渲染进程数据 */
 	render: {} as { [x: string]: any }
 };
