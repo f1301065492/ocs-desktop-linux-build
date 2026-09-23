@@ -1,9 +1,20 @@
 name: Build Linux AppImage
 
-# 独立于 build.yml：只构建 Linux x64 的 AppImage，用于手动出包。
+# 独立于 build.yml：只构建 Linux x64 的 AppImage + deb。
 # build.yml 的 matrix 会同时构建 win/mac/mac-arm64/linux 四个平台，耗时且没有必要。
+#
+# 两种触发方式：
+# - workflow_dispatch：临时出包，不涉及版本号，产物只进 Actions artifacts
+# - workflow_call：由 release.yml 在发布流程里调用，产物随后会被挂到 Release 上
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 要构建的 ref（tag / 分支 / commit）。发布流程必须传新打的 tag，
+          否则会被复用成调用方的旧 commit，构建出错误版本号的产物
+        type: string
+        required: false
 
 jobs:
   build-linux-appimage:
@@ -12,6 +23,9 @@ jobs:
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
+        with:
+          # 不传 ref 时保持默认行为（构建触发它的那个 ref）
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Install Node.js
         uses: actions/setup-node@v4

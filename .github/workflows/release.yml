@@ -1,0 +1,137 @@
+name: Release
+
+# 手动触发的发布流程：顺延版本号 → 打 tag → 构建 → 发布 Release。
+#
+# 刻意不做成 push 触发：推代码与发版是两件事，纯文档/CI 改动不该占版本号，
+# 也不该出现「推了三次涨了三个版本但一次都没发」。
+#
+# 怎么触发：
+#   gh workflow run release.yml --repo <owner>/<repo> --field bump=auto
+# 或在 GitHub 的 Actions 页面点 Run workflow。
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "版本递增类型。auto 会按提交内容判断：有 feat 则 minor，否则 patch"
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+        default: auto
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.bump.outputs.tag }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+        with:
+          # 要读历史才能按提交内容判断递增类型
+          fetch-depth: 0
+
+      - name: 计算并写入新版本号
+        id: bump
+        run: |
+          set -e
+          CURRENT=$(jq -r .version package.json)
+          echo "当前版本: $CURRENT"
+
+          BUMP="${{ inputs.bump }}"
+          if [ "$BUMP" = "auto" ]; then
+            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$LAST_TAG" ]; then
+              RANGE="$LAST_TAG..HEAD"
+              echo "统计范围: $LAST_TAG..HEAD"
+            else
+              RANGE="HEAD"
+              echo "还没有任何 tag，统计全部提交"
+            fi
+            if git log "$RANGE" --pretty=%s | grep -qE '^feat(\(.+\))?!?:'; then
+              BUMP=minor
+            else
+              BUMP=patch
+            fi
+            echo "自动判定递增类型: $BUMP"
+          fi
+
+          NEXT=$(node -e "
+            const [maj, min, pat] = '$CURRENT'.split('.').map(Number);
+            const b = '$BUMP';
+            const v = b === 'major' ? [maj + 1, 0, 0] : b === 'minor' ? [maj, min + 1, 0] : [maj, min, pat + 1];
+            process.stdout.write(v.join('.'));
+          ")
+          echo "新版本: $NEXT"
+
+          # 两处必须同步：
+          # - root package.json 是 release-please 时代留下的主版本号位置
+          # - packages/app/package.json 才是 electron-builder 产物名（ocs-${version}-...）
+          #   和运行时 app.getVersion() 的来源，漏改它会让更新检测永远认为「已是最新」
+          jq --arg v "$NEXT" '.version = $v' package.json > /tmp/root.json && mv /tmp/root.json package.json
+          jq --arg v "$NEXT" '.version = $v' packages/app/package.json > /tmp/app.json && mv /tmp/app.json packages/app/package.json
+
+          echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: 提交并打 tag
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json packages/app/package.json
+          git commit -m "chore: release v${{ steps.bump.outputs.version }}"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "v${{ steps.bump.outputs.version }}"
+
+  build:
+    needs: prepare
+    # 必须把新 tag 传进去：prepare 刚推了新提交，而可复用 workflow 默认会 checkout
+    # 调用方的旧 commit，那样构建出来的产物版本号是错的
+    uses: ./.github/workflows/build-linux-appimage.yml
+    with:
+      ref: ${{ needs.prepare.outputs.tag }}
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 创建 Release 并上传产物
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ needs.prepare.outputs.tag }}"
+          echo "产物列表:"
+          ls -lh artifacts/
+
+          # tag 已由 prepare 创建；这里只补 Release。已存在时不报错，便于重跑
+          gh release create "$TAG" --title "$TAG" --generate-notes || true
+
+          # 只传安装包，跳过 actions 可能顺带收集的中间文件
+          for f in artifacts/*.AppImage artifacts/*.deb; do
+            [ -f "$f" ] || continue
+            echo "上传: $f"
+            gh release upload "$TAG" "$f" --clobber
+          done
+
+          echo ""
+          echo "Release 地址: https://github.com/${{ github.repository }}/releases/tag/$TAG"
