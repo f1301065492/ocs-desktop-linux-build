@@ -21,6 +21,14 @@ export type RemoteScriptWorker = <W extends keyof ScriptWorker = keyof ScriptWor
 export const CLOSE_TIMEOUT = 30 * 1000;
 
 /**
+ * 进程输出缓冲上限（按片段计）。
+ *
+ * 浏览器可以连着跑几天，worker 会持续往 stdout/stderr 写，不设上限就是慢性内存泄漏。
+ * 这份缓冲只服务于软件里的控制台面板和 `GET /browsers/:uid/logs`，两者都只看尾部。
+ */
+const MAX_LOG_CHUNKS = 5000;
+
+/**
  * 带错误码的进程错误。
  * 错误码用于跨 IPC 传递后让调用方（尤其是远程 API）能区分失败原因，
  * 而不是只能拿到一句中文提示。
@@ -86,13 +94,13 @@ export class Process extends EventEmitter {
 		this.worker = createRemoteScriptWorker(this.shell);
 
 		this.shell.stdout?.on('data', (data: any) => {
-			this.logs.push(data.toString());
+			this.appendLogs(data.toString());
 			onConsole?.(data.toString());
 		});
 		this.shell.stderr?.on('data', (data: any) => {
 			onConsole?.(data.toString());
 			remote.logger.call('error', String(data));
-			this.logs.push(`${this.browser.name} 错误`, data);
+			this.appendLogs(`${this.browser.name} 错误`, data);
 			notify(`${this.browser.name} 错误`, data, this.browser.uid, {
 				duration: 60 * 1000,
 				copy: true,
@@ -144,8 +152,22 @@ export class Process extends EventEmitter {
 		});
 	}
 
+	/**
+	 * 追加子进程输出，并裁掉超出上限的历史。
+	 *
+	 * 统一转成字符串：同一份缓冲会被软件控制台和远程 API 两处消费，
+	 * 存原始 Buffer 会让两边渲染结果不一致。
+	 */
+	private appendLogs(...parts: unknown[]) {
+		for (const part of parts) {
+			this.logs.push(String(part));
+		}
+		if (this.logs.length > MAX_LOG_CHUNKS) {
+			this.logs.splice(0, this.logs.length - MAX_LOG_CHUNKS);
+		}
+	}
+
 	async launchPreCheck() {
-		// 检查
 		// 注意：以下失败路径必须 throw 而不是 return，
 		// 否则 launch() 的 then 收到 undefined 后既不 resolve 也不 reject，调用方会永久挂起。
 		if (!this.launchOptions.executablePath) {

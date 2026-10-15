@@ -61,6 +61,7 @@ export const ZHSUnitLoginScript = new AutomationScript(
 		) {
 			try {
 				if (await isNotLogin(page)) {
+					ZHSUnitLoginScript.emit('script-data', '智慧树：开始登录（学校 / 学号）');
 					// 切到「学号登录」tab
 					await page.click('#tab-2');
 					await page.waitForTimeout(1500);
@@ -81,9 +82,14 @@ export const ZHSUnitLoginScript = new AutomationScript(
 
 					if (options?.ocrApiUrl && options?.detTargetKey && options?.detBackgroundKey) {
 						let count = 5;
+						let notified = false;
 						while (await isNotVerified(page)) {
 							if (count > 0) {
 								count--;
+								if (!notified) {
+									notified = true;
+									ZHSUnitLoginScript.emit('script-data', '智慧树：检测到验证码，尝试自动识别');
+								}
 								await verify(page, {
 									ocrApiUrl: options.ocrApiUrl,
 									detTargetKey: options.detTargetKey,
@@ -95,6 +101,7 @@ export const ZHSUnitLoginScript = new AutomationScript(
 								throw new Error('滑块识别失败，请手动登录。');
 							}
 						}
+						ZHSUnitLoginScript.emit('script-data', '智慧树：登录成功');
 					}
 				}
 			} catch (err) {
@@ -135,6 +142,7 @@ export const ZHSPhoneLoginScript = new AutomationScript(
 		) {
 			try {
 				if (await isNotLogin(page)) {
+					ZHSPhoneLoginScript.emit('script-data', '智慧树：开始手机密码登录');
 					// 默认就是「账号登录」tab，这里显式点一次；点不动（比如又改版）也不影响后面按选择器填
 					await page.click('#tab-1\\.1').catch(() => {});
 					await page.waitForTimeout(1000);
@@ -147,8 +155,17 @@ export const ZHSPhoneLoginScript = new AutomationScript(
 
 					if (options?.ocrApiUrl && options?.detTargetKey && options?.detBackgroundKey) {
 						let count = 5;
-						while ((await isNotVerified(page)) && count > 0) {
+						let notified = false;
+						while (await isNotVerified(page)) {
+							if (count <= 0) {
+								// 与学校登录一致：识别不出来就抛错，让调用方（软件日志 / 远程 API）看到明确失败
+								throw new Error('滑块识别失败，请手动登录。');
+							}
 							count--;
+							if (!notified) {
+								notified = true;
+								ZHSPhoneLoginScript.emit('script-data', '智慧树：检测到验证码，尝试自动识别');
+							}
 							await verify(page, {
 								ocrApiUrl: options.ocrApiUrl,
 								detTargetKey: options.detTargetKey,
@@ -157,6 +174,7 @@ export const ZHSPhoneLoginScript = new AutomationScript(
 
 							await page.waitForTimeout(2000);
 						}
+						ZHSPhoneLoginScript.emit('script-data', '智慧树：登录成功');
 					}
 				}
 			} catch (err) {

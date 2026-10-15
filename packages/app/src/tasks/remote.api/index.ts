@@ -14,8 +14,10 @@ import {
 	parseUid,
 	parseClientTokenFilter,
 	parseWaitSeconds,
-	parseQuality
+	parseQuality,
+	parseLogLines
 } from './validate';
+import { maskSecrets } from './mask';
 import { createTask, getInflightTaskId, getTask, setTaskProgress, waitForTask } from './tasks';
 import {
 	attachRendererWindow,
@@ -480,6 +482,49 @@ function createApp(): express.Express {
 			// 画面是瞬时的，别让中间层缓存
 			res.setHeader('Cache-Control', 'no-store');
 			res.send(Buffer.from(shot.base64, 'base64'));
+		})
+	);
+
+	/**
+	 * 读取浏览器子进程的输出（尾部若干行）。
+	 *
+	 * 这是唯一会把**运行期文本原文**交给外部调用方的接口，日志里可能出现账号、密码、Cookie，
+	 * 所以脱敏放在这一层：渲染进程只回传「原文 + 需要屏蔽的取值」，替换在主进程的响应边界完成，
+	 * 渲染侧漏改一处也不至于把凭据漏出去。本地服务 token 由主进程自己补进屏蔽清单。
+	 *
+	 * 日志是渲染进程内存里的进程输出缓冲：浏览器**没在跑就没有历史可回放**（返回空文本 +
+	 * status=closed）。要「关掉之后还能查」，得先把子进程输出落盘——见交接文档里的遗留项。
+	 */
+	api.get(
+		'/browsers/:uid/logs',
+		asyncRoute(async (req, res) => {
+			ensureRenderer();
+			const uid = parseUid(req.params.uid);
+			await getBrowserOrThrow(uid);
+			const lines = parseLogLines(req.query.lines);
+
+			let result: { text: string; status: string; truncated: boolean; secrets?: string[] };
+			try {
+				result = await invokeRenderer('browser.logs', { uid, lines }, { timeoutMs: FAST_OP_TIMEOUT });
+			} catch (err) {
+				throw translateRendererError(err);
+			}
+
+			const masked = maskSecrets(result.text, [store.store.server?.authToken, ...(result.secrets ?? [])]);
+			res.json(
+				ok(
+					{
+						text: masked.text,
+						lineCount: masked.text ? masked.text.split('\n').length : 0,
+						truncated: Boolean(result.truncated),
+						/** 浏览器当前状态；closed 时 text 一定为空 */
+						status: result.status,
+						/** 本次被替换掉的敏感取值出现次数，0 表示这段日志里没出现已知凭据 */
+						masked: masked.masked
+					},
+					requestIdOf(req)
+				)
+			);
 		})
 	);
 

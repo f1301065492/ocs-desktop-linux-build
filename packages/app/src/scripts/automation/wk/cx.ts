@@ -41,6 +41,7 @@ export const CXUnitLoginScript = new AutomationScript(
 		) {
 			try {
 				if (await isNotLogin(page)) {
+					CXUnitLoginScript.emit('script-data', '超星：开始登录（学校 / 机构）');
 					/** 其他登录 */
 					await Promise.all([page.waitForLoadState('networkidle'), page.click('#otherlogin')]);
 					await page.waitForTimeout(3000);
@@ -52,7 +53,7 @@ export const CXUnitLoginScript = new AutomationScript(
 					await page.fill('#uname', configs.id);
 					await page.fill('#password', configs.password);
 
-					await login(page, options);
+					await login(page, (message) => CXUnitLoginScript.emit('script-data', message), options);
 				}
 			} catch (err) {
 				CXUnitLoginScript.emit('script-error', String(err));
@@ -84,10 +85,11 @@ export const CXPhoneLoginScript = new AutomationScript(
 		async run(page, configs) {
 			try {
 				if (await isNotLogin(page)) {
+					CXPhoneLoginScript.emit('script-data', '超星：开始手机密码登录');
 					await page.fill('#phone', configs.phone);
 					await page.fill('#pwd', configs.password);
 
-					await login(page);
+					await login(page, (message) => CXPhoneLoginScript.emit('script-data', message));
 				}
 			} catch (err) {
 				CXPhoneLoginScript.emit('script-error', String(err));
@@ -96,8 +98,16 @@ export const CXPhoneLoginScript = new AutomationScript(
 	}
 );
 
+/**
+ * 提交登录并等待结果。
+ *
+ * notify 用来上报关键事件（最终进 `script-data` → 软件日志 / 远程 API 的日志接口）：
+ * 超星是唯一会连续重试 5 次的站点，调用方只靠最终成败看不出「现在卡在验证码」。
+ * 这里收一个回调而不是整个脚本实例，是为了不和 AutomationScript 的泛型参数较劲。
+ */
 function login(
 	page: Page,
+	notify: (message: string) => void,
 	opts?: {
 		ocrApiUrl?: string;
 		ocrApiImageKey?: string;
@@ -106,11 +116,23 @@ function login(
 	}
 ) {
 	return new Promise<void>((resolve, reject) => {
+		/** 每类验证码只提示一次，否则重试 5 次就刷 5 条 */
+		const notified = { image: false, slider: false };
+		const notifyCaptcha = (kind: 'image' | 'slider', canAuto: boolean) => {
+			if (notified[kind]) {
+				return;
+			}
+			notified[kind] = true;
+			const label = kind === 'image' ? '图片验证码' : '滑块验证码';
+			notify(`超星：检测到${label}，${canAuto ? '尝试自动识别' : '需要人工处理'}`);
+		};
+
 		// 监听登录状态
 		const listenerLogin = (page: Page) => {
 			// 登录成功
 			if (page.url().includes('/space/index') || page.url().includes('/base')) {
 				page.off('load', listenerLogin);
+				notify('超星：登录成功');
 				resolve();
 			}
 		};
@@ -129,6 +151,7 @@ function login(
 			const area = await page.$('#numVerCode');
 			const codeInput = await page.$('#vercode');
 			if (area && codeInput) {
+				notifyCaptcha('image', Boolean(opts?.ocrApiUrl && opts?.ocrApiImageKey));
 				/** 破解验证码 */
 				if (opts?.ocrApiUrl && opts?.ocrApiImageKey && area) {
 					await breakVerifyCode(page, area, codeInput, {
@@ -145,6 +168,7 @@ function login(
 			// 2024年新增-滑块验证码
 			const captchaEl = await page.$('#captcha');
 			if (captchaEl) {
+				notifyCaptcha('slider', Boolean(opts?.ocrApiUrl && opts?.detBackgroundKey && opts?.detTargetKey));
 				// 先登录才会出现验证码
 				if (tryCount === 4) {
 					await page.click('#loginBtn');

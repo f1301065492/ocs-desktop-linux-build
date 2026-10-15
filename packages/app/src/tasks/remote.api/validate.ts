@@ -333,3 +333,21 @@ export function parseWaitSeconds(raw: unknown): number {
 	}
 	return Math.min(Math.floor(value), 60);
 }
+
+/** 日志尾部行数默认值 */
+export const DEFAULT_LOG_LINES = 200;
+
+/** 日志尾部行数上限：日志会随浏览器运行不断增长，不设上限等于让调用方一次性拉走全部输出 */
+const LOG_LINES_MAX = 1000;
+
+/** 解析 ?lines= 日志尾部行数，默认 200，上限 1000 */
+export function parseLogLines(raw: unknown): number {
+	if (raw === undefined || raw === '') {
+		return DEFAULT_LOG_LINES;
+	}
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < 1 || value > LOG_LINES_MAX) {
+		throw new ApiError('INVALID_ARGUMENT', `lines 必须是 1-${LOG_LINES_MAX} 之间的整数`);
+	}
+	return value;
+}

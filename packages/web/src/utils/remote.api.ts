@@ -382,6 +382,62 @@ async function handlePages(payload: { uid: string }) {
 	return invokeWorker(process, 'listPages', 'pages-result', {}, WORKER_OP_TIMEOUT);
 }
 
+/**
+ * 日志里需要屏蔽的取值：该浏览器所有自动化程序的配置值。
+ *
+ * 取值可能是 string / number / boolean / 数组（见 API 的 AutomationConfigValue），
+ * 一律转成字符串交给主进程；短值的过滤在 mask.ts 里统一做。
+ */
+function collectLogSecrets(browser: Browser): string[] {
+	const secrets: string[] = [];
+	for (const script of browser.automationScripts ?? []) {
+		for (const config of Object.values(script.configs ?? {})) {
+			const value = (config as { value?: unknown } | undefined)?.value;
+			if (Array.isArray(value)) {
+				for (const item of value) {
+					if (item !== null && item !== undefined) {
+						secrets.push(String(item));
+					}
+				}
+			} else if (value !== null && value !== undefined) {
+				secrets.push(String(value));
+			}
+		}
+	}
+	return secrets;
+}
+
+/**
+ * 读取某个浏览器子进程的输出（尾部若干行）。
+ *
+ * 只回传「原文 + 需要屏蔽的取值」，实际替换交给主进程在响应边界完成（见 remote.api/mask.ts）：
+ * 渲染侧漏改一处也不会把账号密码漏给外部调用方。
+ *
+ * 日志是内存里的进程输出缓冲，浏览器没在跑就没有历史可回放（status 会是 closed）。
+ */
+async function handleLogs(payload: { uid: string; lines: number }) {
+	const browser = Browser.from(payload.uid);
+	if (!browser) {
+		throw apiError('BROWSER_NOT_FOUND', `浏览器不存在: ${payload.uid}`);
+	}
+
+	const process = Process.from(payload.uid);
+	// 一个 stdout chunk 里可能有多行，一行也可能被拆进多个 chunk，先拼成整段文本再按行取尾部
+	const text = (process?.logs ?? []).map((item) => String(item)).join('');
+	if (!text) {
+		return { text: '', truncated: false, status: process?.status ?? 'closed', secrets: collectLogSecrets(browser) };
+	}
+
+	const all = text.split('\n');
+	const truncated = all.length > payload.lines;
+	return {
+		text: truncated ? all.slice(all.length - payload.lines).join('\n') : text,
+		truncated,
+		status: process?.status ?? 'closed',
+		secrets: collectLogSecrets(browser)
+	};
+}
+
 /** 部分更新 name / notes / tags。不涉及 automationScripts——那个走追加/删除接口 */
 async function handleUpdate(payload: {
 	uid: string;
@@ -511,6 +567,7 @@ const handlers: Record<string, (payload: any) => Promise<unknown>> = {
 	'browser.close': handleClose,
 	'browser.screenshot': handleScreenshot,
 	'browser.pages': handlePages,
+	'browser.logs': handleLogs,
 	'browser.update': handleUpdate,
 	'browser.addScripts': handleAddScripts,
 	'browser.removeScript': handleRemoveScript,
