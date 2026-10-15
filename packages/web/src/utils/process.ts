@@ -185,16 +185,22 @@ export class Process extends EventEmitter {
 			}
 
 			Status.loading('正在检查脚本更新...');
-			const scriptsToInstall = await filterScriptsNeedingInstall(enabledUserScripts);
+			// 已安装版本按浏览器（profile）取：脚本条目上的 lastInstalledVersion 是全软件共用的，
+			// 会让新建的浏览器（全新 profile）被误判成「已装最新版」而跳过安装。
+			const installedVersions = this.browser.userscriptVersions || {};
+			const scriptsToInstall = await filterScriptsNeedingInstall(enabledUserScripts, installedVersions);
 			if (scriptsToInstall.length > 0) {
 				Status.loading(`正在启动 ${this.browser.name}（需更新/安装 ${scriptsToInstall.length} 个脚本）...`);
 			} else {
 				Status.loading(`正在启动 ${this.browser.name}（脚本均为最新，无需更新）...`);
 			}
 			this.once('launched', () => {
-				// 安装成功后更新 lastInstalledVersion
+				// 安装成功后记录到「当前浏览器」上
+				if (!this.browser.userscriptVersions) {
+					this.browser.userscriptVersions = {};
+				}
 				for (const item of scriptsToInstall) {
-					item.script.lastInstalledVersion = item.latestVersion;
+					this.browser.userscriptVersions[item.script.url] = item.latestVersion;
 				}
 				Status.clear();
 			});

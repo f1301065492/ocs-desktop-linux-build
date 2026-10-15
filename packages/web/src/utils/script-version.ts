@@ -93,6 +93,79 @@ export async function fetchRemoteVersion(codeUrl: string): Promise<FetchVersionR
 }
 
 /**
+ * 回退抓取脚本正文解析版本的结果缓存。
+ *
+ * 官方 OCS 网课助手（https://cdn.ocsjs.com/ocs.user.js，约 1MB）没有对应的 ocs.meta.js（404），
+ * 只能拉正文解析 @version；同一会话里连续启动多个浏览器时不该每次都重新下载一份。
+ * 只缓存「解析成功」的结果，失败下次仍会重试。
+ */
+const SCRIPT_BODY_VERSION_CACHE_TTL = 10 * 60 * 1000;
+const scriptBodyVersionCache = new Map<string, { version: string; time: number }>();
+
+/**
+ * 拉取脚本正文，从 UserScript 头里解析 @version。
+ *
+ * 用于脚本源不支持 .meta.js 约定的场景（如官方 OCS 网课助手所在 CDN）。
+ */
+export async function fetchScriptVersion(codeUrl: string): Promise<string | undefined> {
+	const cached = scriptBodyVersionCache.get(codeUrl);
+	if (cached && Date.now() - cached.time < SCRIPT_BODY_VERSION_CACHE_TTL) {
+		return cached.version;
+	}
+
+	try {
+		const res = await remote.methods.call('getWithStatus', codeUrl);
+		const status: number | undefined = res?.status;
+		if (status && (status < 200 || status >= 300)) {
+			return undefined;
+		}
+		const text = res?.data;
+		if (typeof text !== 'string') {
+			return undefined;
+		}
+		const version = parseVersionFromMeta(text);
+		if (version) {
+			scriptBodyVersionCache.set(codeUrl, { version, time: Date.now() });
+		}
+		return version;
+	} catch (e) {
+		return undefined;
+	}
+}
+
+/** 远端最新版本及其来源 */
+export interface RemoteVersionResult {
+	/** 解析到的最新版本号，undefined 表示这次没拿到 */
+	version: string | undefined;
+	/** meta.js 拿到的 / 脚本正文拿到的 / 都没拿到 */
+	source: 'meta' | 'script' | 'none';
+}
+
+/**
+ * 解析远端脚本的最新版本号。
+ *
+ * 优先用 .meta.js（几十字节，最省流量）；脚本源不支持 meta 约定时回退到拉脚本正文解析。
+ *
+ * ⚠️ 这里必须真的去问远端，不能用 script.info.version 代替：那份缓存只在「添加脚本」时写入一次，
+ * 之后再也不会刷新。官方 OCS 网课助手这类没有 meta.js 的脚本，一旦拿它当「远端最新版本」，
+ * 结果就和已安装版本永远相等 —— 脚本更新后软件会一直判定「无需安装」，浏览器里停留在旧版本。
+ */
+export async function resolveRemoteVersion(codeUrl: string): Promise<RemoteVersionResult> {
+	const meta = await fetchRemoteVersion(codeUrl);
+	if (meta.version !== undefined) {
+		return { version: meta.version, source: 'meta' };
+	}
+
+	// meta 拿到 404/403，或响应里没有 @version → 拉正文兜底
+	const bodyVersion = await fetchScriptVersion(codeUrl);
+	if (bodyVersion !== undefined) {
+		return { version: bodyVersion, source: 'script' };
+	}
+
+	return { version: undefined, source: 'none' };
+}
+
+/**
  * 轻量級版本比较函数，按 "." 分割逐段比较数值
  * 返回 -1 表示 v1 < v2，0 表示相等，1 表示 v1 > v2
  */
@@ -126,7 +199,7 @@ export function getSpecifiedVersion(codeUrl: string): string | undefined {
 /** 需要安装的脚本项，携带确定的最新版本号 */
 export interface ScriptToInstall {
 	script: StoreUserScript;
-	/** 确定的最新版本号，浏览器安装成功后用于更新 lastInstalledVersion */
+	/** 确定的最新版本号，浏览器安装成功后记录到该浏览器的 userscriptVersions 上 */
 	latestVersion: string;
 }
 
@@ -136,18 +209,26 @@ export interface ScriptToInstall {
  * 判定逻辑：
  * 1. isLocalScript → 始终安装（本地脚本可能被修改了）
  * 2. 强制安装开关开启 → 始终安装
- * 3. lastInstalledVersion 未设置 → 始终安装（首次安装）
- * 4. code_url 含 ?version=xxx（用户指定了版本）→ 比较 lastInstalledVersion 与指定版本，不同则安装
- * 5. 其他网络脚本 → fetchRemoteVersion 获取远程最新版本 → 与 lastInstalledVersion 比较
- * 6. meta.js 返回 404/403 → 使用 info.version（本地缓存）与 lastInstalledVersion 比对
- * 7. 暂时性网络异常 → 降级为安装（保守策略）
+ * 3. 该浏览器没有这个脚本的安装记录 → 安装（含新建的浏览器）
+ * 4. code_url 含 ?version=xxx（用户指定了版本）→ 比较已安装版本与指定版本，不同则安装
+ * 5. 其他网络脚本 → resolveRemoteVersion 获取远程最新版本 → 与已安装版本比较
+ * 6. 拿不到远程版本（网络异常等）→ 降级为安装（保守策略）
+ *
+ * @param scripts 已启用的用户脚本
+ * @param installedVersions 该浏览器（profile）上已安装的脚本版本，key 为脚本条目的 url
  */
-export async function filterScriptsNeedingInstall(scripts: StoreUserScript[]): Promise<ScriptToInstall[]> {
+export async function filterScriptsNeedingInstall(
+	scripts: StoreUserScript[],
+	installedVersions: Record<string, string> = {}
+): Promise<ScriptToInstall[]> {
 	const forceUpdate = store.render.setting.browser.forceUpdateScript;
 	const result: ScriptToInstall[] = [];
 
 	for (const script of scripts) {
 		const codeUrl = script.info?.code_url || script.url;
+		// 已安装版本必须按浏览器取：脚本条目上的 lastInstalledVersion 是全软件共用的，
+		// 新建的浏览器（全新 profile，里面根本没有脚本）会被它误判成「已装最新版」而跳过安装。
+		const installedVersion = installedVersions[script.url];
 
 		// 1. 本地脚本始终安装
 		if (script.isLocalScript) {
@@ -161,8 +242,8 @@ export async function filterScriptsNeedingInstall(scripts: StoreUserScript[]): P
 			continue;
 		}
 
-		// 3. 从未安装过 → 首次安装
-		if (!script.lastInstalledVersion) {
+		// 3. 这个浏览器从未装过 → 首次安装
+		if (!installedVersion) {
 			result.push({ script, latestVersion: script.info?.version || '' });
 			continue;
 		}
@@ -170,36 +251,29 @@ export async function filterScriptsNeedingInstall(scripts: StoreUserScript[]): P
 		// 4. 用户指定了版本 → 比较已安装版本与指定版本，不同则安装
 		const specifiedVersion = getSpecifiedVersion(codeUrl);
 		if (specifiedVersion) {
-			if (compareVersions(script.lastInstalledVersion, specifiedVersion) !== 0) {
+			if (compareVersions(installedVersion, specifiedVersion) !== 0) {
 				result.push({ script, latestVersion: specifiedVersion });
 			}
 			continue;
 		}
 
-		// 5, 6, 7. 获取远程最新版本
-		const fetchResult = await fetchRemoteVersion(codeUrl);
+		// 5, 6. 获取远程最新版本
+		const remote = await resolveRemoteVersion(codeUrl);
 
-		if (fetchResult.metaSupported === false) {
-			// 6. 404/403：脚本源当前不支持 meta.js，使用本地缓存的 info.version 做比对
-			const cachedVersion = script.info?.version;
-			if (cachedVersion && compareVersions(script.lastInstalledVersion, cachedVersion) === 0) {
-				// 本地缓存的版本与已安装版本一致，无需安装
-				continue;
-			}
-			// 版本不同或无缓存 → 安装
-			result.push({ script, latestVersion: cachedVersion || '' });
-			continue;
-		}
-
-		if (fetchResult.version === undefined) {
-			// 7. 暂时性网络异常 → 保守策略，仍然安装
+		if (remote.version === undefined) {
+			// 网络异常等暂时性问题 → 保守策略，仍然安装
 			result.push({ script, latestVersion: script.info?.version || '' });
 			continue;
 		}
 
-		// 5. meta.js 成功获取到版本号，与已安装版本比较
-		if (compareVersions(script.lastInstalledVersion, fetchResult.version) !== 0) {
-			result.push({ script, latestVersion: fetchResult.version });
+		// 顺手把真实的最新版本写回脚本信息：官方脚本的 info.version 只在添加脚本时写入一次，
+		// 不刷新的话界面上显示的版本会一直停在添加那一刻。
+		if (script.info && script.info.version !== remote.version) {
+			script.info.version = remote.version;
+		}
+
+		if (compareVersions(installedVersion, remote.version) !== 0) {
+			result.push({ script, latestVersion: remote.version });
 		}
 	}
 

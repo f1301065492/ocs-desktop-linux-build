@@ -19,6 +19,7 @@ export class Browser extends Entity implements BrowserOptions {
 	histories: BrowserOperateHistory[];
 	parent: string;
 	automationScripts: RawAutomationScript[];
+	userscriptVersions: Record<string, string>;
 	remoteMeta?: BrowserRemoteMeta;
 
 	constructor(opts: BrowserOptions & EntityOptions) {
@@ -31,6 +32,8 @@ export class Browser extends Entity implements BrowserOptions {
 		this.parent = opts.parent;
 		// 兼容旧字段 playwrightScripts
 		this.automationScripts = opts.automationScripts ?? (opts as any).playwrightScripts ?? [];
+		// 老数据没有这个字段：空对象表示「这个浏览器上还没装过脚本」，首次启动会安装一遍
+		this.userscriptVersions = opts.userscriptVersions ?? {};
 		this.cachePath = opts.cachePath;
 		this.remoteMeta = opts.remoteMeta;
 	}
