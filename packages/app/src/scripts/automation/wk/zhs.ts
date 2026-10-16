@@ -18,10 +18,22 @@ import { AutomationScript } from '../../script';
  * 表现为“启动浏览器后账号密码填不进去”。
  *
  * 验证码仍是网易易盾（`input.yidun_input[name="NECaptchaValidate"]`），滑块逻辑不变。
+ *
+ * 登录态判断不看首页：会话失效时首页仍显示成已登录，只看首页会误判「不用登录」。
+ * 改为直接访问「我的课程」（见 COURSE_PAGE_URL），被重定向到登录中心才算没登录。
  */
 const LOGIN_PAGE_HOST = 'login.zhihuishu.com';
 const LOGIN_SUBMIT_SELECTOR = '.login-bottom .base-button-component, .btn-block__grandient_login';
 const PRIVACY_CHECKBOX_SELECTOR = 'label.privacy-checkbox input[type="checkbox"]';
+
+/**
+ * 「我的课程」——判断登录态用它，不用首页。
+ *
+ * 未登录访问它会被重定向到 login.zhihuishu.com，和用户手动点「我的课程」是同一条路径，
+ * 所以能同时抓到「从没登录」和「会话失效但首页还显示已登录」两种情况。
+ */
+const COURSE_PAGE_URL = 'https://onlineweb.zhihuishu.com/onlinestuh5';
+const COURSE_PAGE_HOST = 'onlineweb.zhihuishu.com';
 
 export const ZHSUnitLoginScript = new AutomationScript(
 	{
@@ -60,7 +72,7 @@ export const ZHSUnitLoginScript = new AutomationScript(
 			}
 		) {
 			try {
-				if (await isNotLogin(page)) {
+				if (await isNotLogin(page, (message) => ZHSUnitLoginScript.emit('script-data', message))) {
 					ZHSUnitLoginScript.emit('script-data', '智慧树：开始登录（学校 / 学号）');
 					// 切到「学号登录」tab
 					await page.click('#tab-2');
@@ -141,7 +153,7 @@ export const ZHSPhoneLoginScript = new AutomationScript(
 			}
 		) {
 			try {
-				if (await isNotLogin(page)) {
+				if (await isNotLogin(page, (message) => ZHSPhoneLoginScript.emit('script-data', message))) {
 					ZHSPhoneLoginScript.emit('script-data', '智慧树：开始手机密码登录');
 					// 默认就是「账号登录」tab，这里显式点一次；点不动（比如又改版）也不影响后面按选择器填
 					await page.click('#tab-1\\.1').catch(() => {});
@@ -232,13 +244,75 @@ async function isNotVerified(page: Page) {
 }
 
 /**
- * 是否未登录；未登录时顺带点开登录中心并把表单等出来。
+ * 是否未登录；未登录时顺带把登录中心的表单等出来。
  *
- * 首页未登录时「登录 / 注册」入口 `#notLogin` 可见（已登录则是 `#login` 那块用户信息区），
- * 点它会跳到 login.zhihuishu.com。
+ * ⚠️ 不能只看首页的「登录 / 注册」入口（`#notLogin`）：那只是 UI 状态，
+ * 会话失效时首页**仍会显示成已登录**（用户信息是缓存的）。
+ * 只看它会误判「不用登录」，而用户点进「我的课程」被踢回登录页时，脚本早就跑完了——
+ * 表现就是「浏览器重开后看着是登录着的，一进课程又要登录，还没人自动填」。
+ *
+ * 所以走真实路径：直接访问必须有登录态才能进的「我的课程」页，被重定向到
+ * login.zhihuishu.com 就说明没登录。
  */
-async function isNotLogin(page: Page) {
-	await page.goto('https://www.zhihuishu.com/');
+async function isNotLogin(page: Page, notify?: (message: string) => void) {
+	await page.goto(COURSE_PAGE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+	await waitForUrlSettle(page, LOGIN_PAGE_HOST);
+
+	if (page.url().includes(LOGIN_PAGE_HOST)) {
+		await waitForLoginForm(page);
+		return true;
+	}
+
+	// 稳稳落在课程页上＝登录态有效
+	if (page.url().includes(COURSE_PAGE_HOST)) {
+		notify?.('智慧树：登录态有效（能打开「我的课程」），跳过登录');
+		return false;
+	}
+
+	// 既不是课程页也不是登录中心：多半是站点又改版了。
+	// 退回首页入口判断（旧逻辑）——那套对「会话失效」不灵，但总比让脚本静默不干活强，
+	// 同时在日志里留一条，方便从远程日志接口看到。
+	notify?.('智慧树：「我的课程」地址可能变了，已退回首页判断登录态（结果可能不准）');
+	return await isNotLoginByHomepage(page);
+}
+
+/**
+ * 等跳转稳定下来。
+ *
+ * 「我的课程」不是同步重定向：页面先正常打开，过一会儿才由 JS 跳去登录中心。
+ * 踩过的坑：访问后固定等 2 秒再读 URL，那时还停在课程页上，于是被判成「已登录」直接跳过，
+ * 用户点进课程被踢回登录页时才发现没人填。
+ *
+ * 这里等到 URL 出现目标 host，或者连续 3 秒没再变（视作跳转结束），最多等 30 秒。
+ */
+async function waitForUrlSettle(page: Page, untilHost: string) {
+	const deadline = Date.now() + 30 * 1000;
+	let last = page.url();
+	let stableSince = Date.now();
+
+	while (Date.now() < deadline) {
+		if (page.url().includes(untilHost)) {
+			return;
+		}
+		if (page.url() !== last) {
+			last = page.url();
+			stableSince = Date.now();
+		} else if (Date.now() - stableSince > 3000) {
+			return;
+		}
+		await page.waitForTimeout(300);
+	}
+}
+
+/** 点开登录中心并把表单等出来（表单没出现就 fill，会直接超时） */
+async function waitForLoginForm(page: Page) {
+	await page.waitForSelector('input[name="mobile"], #tab-2', { timeout: 60 * 1000 });
+	await page.waitForTimeout(2000);
+}
+
+/** 旧的判断方式：首页上「登录 / 注册」入口可见即未登录。仅作为兜底 */
+async function isNotLoginByHomepage(page: Page) {
+	await page.goto('https://www.zhihuishu.com/', { waitUntil: 'domcontentloaded' });
 	await page.waitForTimeout(2000);
 
 	const notLogin = await page.evaluate(() => {
@@ -248,9 +322,7 @@ async function isNotLogin(page: Page) {
 
 	if (notLogin) {
 		await page.click('#notLogin');
-		// 登录页加载出来之前就 fill 的话会直接超时，这里先把表单等出来
-		await page.waitForSelector('input[name="mobile"], #tab-2', { timeout: 60 * 1000 });
-		await page.waitForTimeout(2000);
+		await waitForLoginForm(page);
 	}
 
 	return notLogin;
