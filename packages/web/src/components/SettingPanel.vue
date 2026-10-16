@@ -80,6 +80,14 @@
 				</a-tooltip>
 			</Description>
 
+			<Description label="每次启动前清除登录状态">
+				<a-tooltip
+					content="启用后每次启动会先清掉该浏览器的 cookie 与站点本地存储，等于每次全新登录，可避免「看着已登录、点进课程又要登录」。需配好登录类自动化程序；油猴脚本不受影响。"
+				>
+					<a-switch v-model="store.render.setting.browser.clearLoginOnLaunch" />
+				</a-tooltip>
+			</Description>
+
 			<Description label="新建浏览器自动初始化">
 				<a-tooltip
 					content="启用后，点击新建浏览器将自动打开初始化弹窗并执行（新建浏览器、添加自动化程序），关闭则直接创建空浏览器"

@@ -146,7 +146,8 @@ export class Process extends EventEmitter {
 				tags: this.browser.tags
 			},
 			config: {
-				enable_dialog: store.render.setting.browser.enableDialog
+				enable_dialog: store.render.setting.browser.enableDialog,
+				clear_login_on_launch: store.render.setting.browser.clearLoginOnLaunch
 			},
 			langs: store.render.langs as any
 		});

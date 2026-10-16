@@ -70,6 +70,14 @@ export type WebStore = {
 			enableDialog: boolean;
 			/** 是否强制更新/安装脚本 */
 			forceUpdateScript: boolean;
+			/**
+			 * 每次启动浏览器前清除登录状态（cookie / 站点本地存储）。
+			 *
+			 * 开着它就等于「每次启动都是一次全新登录」：不会再出现「首页显示已登录、点进课程
+			 * 却被踢回登录页」这种会话失效的状态。代价是启动要重走一遍登录（可能还要过验证码），
+			 * 所以要配合登录类自动化程序用。
+			 */
+			clearLoginOnLaunch: boolean;
 			/** 点击「新建浏览器」时是否自动打开初始化弹窗并执行初始化 */
 			autoInitNewBrowser: boolean;
 		};
@@ -148,6 +156,8 @@ const _store: AppStore & { render: WebStore } = defaultsDeep(remote['electron-st
 				cachesSizeWarningPoint: 10,
 				enableDialog: false,
 				forceUpdateScript: false,
+				// 默认关：开着会让每次启动都重走一遍登录，得配了登录类自动化程序才划算
+				clearLoginOnLaunch: false,
 				autoInitNewBrowser: true
 			}
 		},
