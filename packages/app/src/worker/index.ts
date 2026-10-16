@@ -563,8 +563,10 @@ export async function launchBrowser({
 					await openExtensionDeveloperMode(browser, executablePath.includes('edge'));
 
 					// 必须先打开开发者模式，才能关闭额外拓展页，否则打开开发者模式可能会重启插件，导致出现新的额外页面
-					// 关闭拓展加载时弹出的首页
-					waitAndCloseExtensionHomepage({ browser, closeableExtensionHomepages });
+					// 关闭拓展加载时弹出的首页。
+					// 刻意不 await：等不到页面要白等一分钟，会拖慢启动（函数本身保证不抛，见其注释）；
+					// 这个 catch 是防以后被改出意外——一个未处理的 rejection 就足以杀掉整个子进程。
+					waitAndCloseExtensionHomepage({ browser, closeableExtensionHomepages }).catch(() => {});
 
 					// 安装用户脚本
 					const warn = await setupUserScripts({ browser, userscripts, step, enabledScriptCount });
@@ -778,17 +780,41 @@ async function runAutomationScripts(opts: {
 }
 
 /**
- * 关闭浏览器拓展主页
+ * 等待拓展首页出现的上限。
+ *
+ * 只是关个欢迎页，没必要无限等；等不到就当没这回事。
+ */
+const EXTENSION_HOMEPAGE_WAIT_MS = 60 * 1000;
+
+/**
+ * 关闭浏览器拓展主页（ScriptCat / Tampermonkey 在扩展首次加载、版本更新时弹的说明页）。
+ *
+ * ⚠️ 两件事凑在一起会出人命，改动前务必读懂：
+ *   1. 调用方**刻意不 await** 它（等不到页面要白等一分钟，会拖慢启动）；
+ *   2. 它一旦 reject，就是一个**未处理的 rejection**，Node 默认行为是直接杀掉这个子进程。
+ * 表现就是「浏览器跑到一分钟左右突然整个消失」，报错正是「浏览器拓展加载超时」——
+ * 线上真出过这个事故（Linux 上扩展没弹欢迎页时必现）。
+ *
+ * 所以本函数**保证不抛**：等不到就安静收工（扩展装好之后浏览器本来就不会再弹欢迎页，
+ * 这是常态而非异常），期间任何页面/浏览器被关掉的异常一律吞掉。
  */
 async function waitAndCloseExtensionHomepage(opts: { browser: BrowserContext; closeableExtensionHomepages: string[] }) {
-	return new Promise<any>((resolve, reject) => {
-		const timeout = setTimeout(() => {
-			clearInterval(interval);
-			reject(new Error('浏览器拓展加载超时，请尝试重启浏览器，或者查看网络情况。'));
-		}, 60 * 1000);
-		const interval = setInterval(async () => {
-			const includes: Page[] = [];
-			for (const page of opts.browser.pages()) {
+	const deadline = Date.now() + EXTENSION_HOMEPAGE_WAIT_MS;
+
+	while (Date.now() < deadline) {
+		await sleep(1000);
+
+		let pages: Page[];
+		try {
+			pages = opts.browser.pages();
+		} catch {
+			// 浏览器已经被关掉了：没有页面要处理
+			return;
+		}
+
+		const includes: Page[] = [];
+		for (const page of pages) {
+			try {
 				// 当拓展主页无法访问时，会跳转到chrome-error://chromewebdata/，此时获取的url为chrome-error://chromewebdata/，而不是拓展主页的url，但是title是拓展主页的host
 				const title = page.url() === 'chrome-error://chromewebdata/' ? await page.title() : '';
 				if (
@@ -798,16 +824,20 @@ async function waitAndCloseExtensionHomepage(opts: { browser: BrowserContext; cl
 				) {
 					includes.push(page);
 				}
+			} catch {
+				// 单页出错（多半是刚被关掉）：跳过这一页，别连累其它页
 			}
-			if (includes.length) {
-				clearInterval(interval);
-				clearTimeout(timeout);
-				Promise.all(includes.map(async (page) => page.close()))
-					.then(resolve)
-					.catch(reject);
-			}
-		}, 1000);
-	});
+		}
+
+		if (includes.length) {
+			await Promise.all(includes.map((page) => page.close().catch(() => {})));
+			return;
+		}
+	}
+
+	console.log(
+		`等待拓展首页超时（${EXTENSION_HOMEPAGE_WAIT_MS / 1000} 秒内没出现，通常是扩展已装好、不会再弹欢迎页），跳过关闭`
+	);
 }
 
 function browserNetworkRoute(authToken: string, browser: BrowserContext) {
