@@ -588,11 +588,66 @@ async function dispatch(method: string, payload: unknown): Promise<unknown> {
  * 主进程据此做两件事：持久化运行清单（供渲染进程重载后对账出孤儿），
  * 以及对比状态快照、只对真正变化的 uid 广播 SSE 事件。
  */
+/**
+ * 孤儿名单只保留「进程确实还活着」的 uid。
+ *
+ * 主进程那条运行记录只能说明「上次退出/重载时它还在跑」，但机器重启、进程被手动结束后
+ * 它其实早没了。照旧报 orphaned 的话，调用方会一直看到「失联」，而浏览器窗口根本不存在，
+ * 也没法启动恢复（那一栏永远是失联）。
+ *
+ * 核实方式：Playwright 启动时传的 `--user-data-dir=<cachePath>` 里带着 uid，
+ * 命令行里能找到它即视为存活。
+ *
+ * 两个保守设定（都是刻意为之）：
+ * - **只在非 Windows 平台做**：Windows 上 systeminformation 只给可执行文件路径、不给启动参数
+ *   （实测 295 个进程没有一个带 cmd），拿它匹配 uid 必然失配，会把活着的浏览器判成已退出；
+ *   而「谎报已关闭」比「谎报失联」危险得多——调用方会去启动，然后撞上 profile 锁。
+ * - **接口异常 / 拿不到命令行时保留孤儿标记**，宁可报失联也不猜。
+ */
+async function filterAliveOrphans(uids: string[]): Promise<string[]> {
+	if (uids.length === 0) {
+		return uids;
+	}
+	try {
+		// 平台由主进程给（渲染进程不直接碰 node 全局）
+		const platform: string = await remote.methods.call('getPlatform');
+		if (platform === 'win32') {
+			return uids;
+		}
+		const result: any = await remote.methods.call('systemProcesses');
+		const list: any[] = Array.isArray(result) ? result : result?.list;
+		if (!Array.isArray(list) || list.length === 0) {
+			return uids;
+		}
+		const commands: string[] = list
+			.flatMap((item) => [item?.cmd, item?.params, item?.command])
+			.filter((value): value is string => typeof value === 'string' && value.length > 0);
+		if (commands.length === 0) {
+			return uids;
+		}
+		return uids.filter((uid) => commands.some((command) => command.includes(uid)));
+	} catch {
+		return uids;
+	}
+}
+
 async function syncRunningState() {
 	try {
 		const snapshot = processes
 			.filter((process) => process.status !== 'closed')
 			.map((process) => ({ uid: process.uid, status: process.status as string }));
+
+		/**
+		 * 有句柄了就不再是孤儿：把快照里的 uid 从孤儿名单摘掉。
+		 *
+		 * 不摘会怎样（线上真踩过）：本轮会话开场对账时，某个 uid 因为「上次退出/重载时子进程还在」
+		 * 被记进孤儿名单；之后用户重新启动它（状态正常显示 launched），再关闭时 statusOf() 依然先看
+		 * 孤儿名单，于是「已关闭」被报成 orphaned——调用方（网关/前端）会显示成「失联」，而且只要不重启
+		 * 应用就一直错下去。
+		 */
+		for (const item of snapshot) {
+			orphanedUids.delete(item.uid);
+		}
 
 		/**
 		 * 只有本次会话的第一次上报才算「重建视图」：此刻渲染进程的 processes 表是空的，
@@ -606,7 +661,8 @@ async function syncRunningState() {
 		reconciledThisSession = true;
 
 		if (freshSession && result && Array.isArray(result.orphans)) {
-			orphanedUids = new Set<string>(result.orphans);
+			// 主进程只能推断「可能还在跑」，这里核实一下进程是否真的存在
+			orphanedUids = new Set<string>(await filterAliveOrphans(result.orphans));
 		}
 	} catch (err) {
 		// 主进程尚未注册 handler（启动早期）或通道异常，下次同步会重试。
