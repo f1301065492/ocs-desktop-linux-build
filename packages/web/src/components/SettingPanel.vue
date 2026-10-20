@@ -142,6 +142,8 @@
 
 		<RemoteApiSetting />
 
+		<DshBridgeSetting />
+
 		<SshTunnelSetting />
 
 		<a-card title="路径设置">
@@ -185,6 +187,7 @@ import { lang, store } from '../store';
 import { remote } from '../utils/remote';
 import BrowserPath from './setting/BrowserPath.vue';
 import RemoteApiSetting from './setting/RemoteApiSetting.vue';
+import DshBridgeSetting from './setting/DshBridgeSetting.vue';
 import SshTunnelSetting from './setting/SshTunnelSetting.vue';
 import OCSConfigs from './OCSConfigs.vue';
 import { reactive } from 'vue';

@@ -7,6 +7,13 @@
 	},
 	"productName": "OCS Desktop",
 	"asar": false,
+	"extraResources": [
+		{
+			"from": "../../tools/ocs-openclaw",
+			"to": "tools/ocs-openclaw",
+			"filter": ["**/*", "!test/**"]
+		}
+	],
 	"copyright": "Copyright © 2021 ${author}",
 	"nsis": {
 		"oneClick": true

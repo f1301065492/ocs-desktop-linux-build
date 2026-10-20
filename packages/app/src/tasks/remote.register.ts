@@ -21,6 +21,7 @@ import { encryptRenderString, decryptRenderString } from '../crypto';
 import { attachRendererWindow, getRemoteApiStatus, restartRemoteApi } from './remote.api';
 import { clearApiKey, generateApiKey, setApiKey, updateRemoteApiConfig } from './remote.api/config';
 import { regenerateTlsMaterial } from './remote.api/tls';
+import { detectDsh, writeDshProfile } from './dsh.bridge';
 import {
 	confirmHostKey,
 	ensureKeyHealthy,
@@ -315,6 +316,32 @@ const methods = {
 		await restartRemoteApi();
 		return getRemoteApiStatus();
 	},
+
+	// ── DSH（DeepSeek Harness）接入 ──
+
+	/** 检测本机 DSH 与随应用发布的桥接脚本，并带上远程 API 的当前状态 */
+	dshBridgeStatus: () => {
+		const api = getRemoteApiStatus();
+		return {
+			...detectDsh(),
+			remoteApi: {
+				enabled: api.enabled,
+				listening: api.listening,
+				port: api.port,
+				bindAddress: api.bindAddress,
+				hasKey: api.hasKey,
+				certFingerprint: api.certFingerprint
+			}
+		};
+	},
+	/** 把 OCS 的 MCP 桥接配置写进指定 DSH profile（受管块，重复执行幂等） */
+	dshBridgeWrite: (input: {
+		profile: string;
+		ocsBase: string;
+		apiKey: string;
+		certFingerprint?: string;
+		dshHome?: string;
+	}) => writeDshProfile(input),
 
 	// ── SSH 反向隧道 ──
 
