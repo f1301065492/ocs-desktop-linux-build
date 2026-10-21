@@ -31,9 +31,14 @@
 					state.status?.exists && state.status?.profiles?.length
 						? `已检测到 DSH 数据目录（${state.status.home}）`
 						: state.status?.exists
-						? `这个目录里没有 profiles/（${state.status.home}）——DSH 可能装在别处（如 /root/deepseek-harness），数据就在该目录下或它下面的 .dsh/`
+						? `这个目录里没有 profiles/（${state.status.home}）——DSH 数据可能在别的用户目录下，或它下面的 .dsh/`
 						: `没检测到 DSH（${state.status?.home || ''}）—— 填 DSH 数据目录的绝对路径（里面有 profiles/）`
 				}}
+			</div>
+			<div class="hint">
+				找不到时：在终端里跑
+				<code>find /root /home /opt /var -maxdepth 6 -type f -name 'cordis.patch.yml' 2>/dev/null</code>
+				，它的上两级目录就是数据目录（也可以用 DSH 进程的 <code>DSH_HOME</code>/<code>HOME</code> 确认）。
 			</div>
 		</Description>
 

@@ -78,8 +78,13 @@ if [ -n "$DSH_HOME" ]; then
 	RESOLVED_DSH="$(resolve_dsh_home "$DSH_HOME")" ||
 		fail "在 $DSH_HOME 下找不到 profiles/（也试过 $DSH_HOME/.dsh）。确认它就是 DSH 的数据目录，或用 --dsh-home 指定"
 else
-	RESOLVED_DSH="$(resolve_dsh_home "$HOME/.dsh" /root/deepseek-harness "$HOME/deepseek-harness")" ||
-		fail "没找到 DSH 数据目录（试过 ~/.dsh、/root/deepseek-harness、~/deepseek-harness 及其下的 .dsh）。用 --dsh-home <目录> 指定"
+	# 候选：当前用户的 ~/.dsh → /root/.dsh → /root/deepseek-harness → ~/deepseek-harness → 各普通用户的 ~/.dsh
+	CANDIDATES=("$HOME/.dsh" /root/.dsh /root/deepseek-harness "$HOME/deepseek-harness")
+	for candidate in /home/*/.dsh; do
+		[ -d "$candidate" ] && CANDIDATES+=("$candidate")
+	done
+	RESOLVED_DSH="$(resolve_dsh_home "${CANDIDATES[@]}")" ||
+		fail "没找到 DSH 数据目录（试过 ~/.dsh、/root/.dsh、/root/deepseek-harness、~/deepseek-harness、/home/*/.dsh 及其下的 .dsh）。用 --dsh-home <目录> 指定"
 fi
 DSH_HOME="$RESOLVED_DSH"
 info "DSH 数据目录: $DSH_HOME"

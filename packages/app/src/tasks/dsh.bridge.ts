@@ -106,6 +106,16 @@ export function dshHomeCandidates(): string[] {
 	list.push(path.join(os.homedir(), '.dsh'));
 	list.push('/root/deepseek-harness');
 	list.push(path.join(os.homedir(), 'deepseek-harness'));
+	// DSH 常以单独的普通用户运行：数据在各用户的 ~/.dsh 下（OCS 以 root 跑时最有用）
+	if (process.platform !== 'win32') {
+		try {
+			for (const user of fs.readdirSync('/home')) {
+				list.push(path.join('/home', user, '.dsh'));
+			}
+		} catch {
+			// 没有 /home 或没权限：忽略
+		}
+	}
 	return [...new Set(list)];
 }
 
