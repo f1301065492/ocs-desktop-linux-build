@@ -5,15 +5,17 @@
 # 做的事：
 #   1. 检查 node、桥接脚本、OCS 的健康检查（https://127.0.0.1:15320）
 #   2. 拿到证书指纹（可用就填上）
-#   3. 在 ~/.dsh/profiles/<profile>/cordis.patch.yml 里写入/更新一段带标记的 ocs-mcp 配置
+#   3. 在 DSH 数据目录的 profiles/<profile>/cordis.patch.yml 里写入/更新一段带标记的 ocs-mcp 配置
 #      （先备份；同一段标记会被替换，可反复执行）
+#      数据目录自动探测：--dsh-home / DSH_HOME → ~/.dsh → /root/deepseek-harness → ~/deepseek-harness，
+#      每个候选都同时认 `<dir>/profiles` 与 `<dir>/.dsh/profiles` 两种布局
 #   4. 用真实密钥跑一次 check-ocs.mjs 验证（可加 --no-verify 跳过）
 #
 # 用法：
-#   ./setup-same-host.sh                       # 交互式：列 profile、要密钥
+#   ./setup-same-host.sh                       # 交互式：自动探测 DSH 目录、列 profile、要密钥
 #   ./setup-same-host.sh --profile web         # 指定 profile
 #   ./setup-same-host.sh --key 'xxx'           # 非交互（注意 shell 历史）
-#   ./setup-same-host.sh --bridge-dir /opt/ocs-bridge --dsh-home ~/.dsh
+#   ./setup-same-host.sh --dsh-home /root/deepseek-harness
 #
 # 说明：默认只改 patch 层，不动 DSH 本体；重启 DSH 后生效。
 set -euo pipefail
@@ -22,7 +24,8 @@ MARK_START='# >>> ocs-mcp (managed by setup-same-host.sh) >>>'
 MARK_END='# <<< ocs-mcp <<<'
 
 BRIDGE_DIR='/opt/ocs-bridge'
-DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
+# 留空表示自动探测（见下面的 resolve_dsh_home）；--dsh-home / DSH_HOME 可显式指定
+DSH_HOME="${DSH_HOME:-}"
 PROFILE=''
 API_KEY=''
 OCS_BASE='https://127.0.0.1:15320'
@@ -31,6 +34,24 @@ VERIFY=1
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
 fail() { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+
+# 把候选目录解析成「DSH 数据目录」（里面有 profiles/）。兼容两种布局：
+#   <dir>/profiles      → dir 本身就是数据目录（如 /root/deepseek-harness）
+#   <dir>/.dsh/profiles → dir 是安装目录，数据在它下面的 .dsh/
+resolve_dsh_home() {
+	for candidate in "$@"; do
+		[ -z "$candidate" ] && continue
+		if [ -d "$candidate/profiles" ]; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+		if [ -d "$candidate/.dsh/profiles" ]; then
+			printf '%s\n' "$candidate/.dsh"
+			return 0
+		fi
+	done
+	return 1
+}
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -51,7 +72,17 @@ command -v node >/dev/null 2>&1 || fail '找不到 node。DSH 依赖 Node，先�
 info "node: $(command -v node) ($(node -v))"
 [ -f "$BRIDGE_DIR/ocs-mcp-server.mjs" ] || fail "桥接脚本不在 $BRIDGE_DIR（先把 tools/ocs-openclaw/ 拷过去，或用 --bridge-dir 指定）"
 info "桥接脚本: $BRIDGE_DIR/ocs-mcp-server.mjs"
-[ -d "$DSH_HOME/profiles" ] || fail "$DSH_HOME/profiles 不存在：DSH 没装在这个用户下？检查 --dsh-home"
+
+# DSH 数据目录：显式指定的优先，否则按常见位置探测（含 /root/deepseek-harness）
+if [ -n "$DSH_HOME" ]; then
+	RESOLVED_DSH="$(resolve_dsh_home "$DSH_HOME")" ||
+		fail "在 $DSH_HOME 下找不到 profiles/（也试过 $DSH_HOME/.dsh）。确认它就是 DSH 的数据目录，或用 --dsh-home 指定"
+else
+	RESOLVED_DSH="$(resolve_dsh_home "$HOME/.dsh" /root/deepseek-harness "$HOME/deepseek-harness")" ||
+		fail "没找到 DSH 数据目录（试过 ~/.dsh、/root/deepseek-harness、~/deepseek-harness 及其下的 .dsh）。用 --dsh-home <目录> 指定"
+fi
+DSH_HOME="$RESOLVED_DSH"
+info "DSH 数据目录: $DSH_HOME"
 
 # ---------- 2. OCS 连通性 ----------
 step '2. OCS 健康检查'

@@ -279,6 +279,15 @@ ls "/opt/OCS Desktop/resources/app" >/dev/null && echo "OCS 装在本机"
 ps -ef | grep -i -E "dsh|harness" | grep -v grep      # 记下 DSH 是怎么起的（systemd？手动 dsh web？）
 ```
 
+**DSH 数据目录不一定是 `~/.dsh`。** 常见三种布局（设置页的「DSH 目录」填哪一层都行，
+程序会依次认 `<目录>/profiles` 与 `<目录>/.dsh/profiles`）：
+
+| 情况 | 填什么 | 判断方法 |
+| --- | --- | --- |
+| DSH_HOME 指向某个目录（如 `/root/deepseek-harness`） | 该目录本身 | `ls /root/deepseek-harness` 里能看到 `profiles/` |
+| DSH 装在目录里、数据在它的 `.dsh/` 下 | 安装目录 | `ls <安装目录>/.dsh` 里能看到 `profiles/` |
+| 默认布局 | `~/.dsh` | `ls ~/.dsh/profiles` 有内容 |
+
 ### 1. 放脚本（别放进 OCS 的安装目录）
 
 `/opt/OCS Desktop/` 是 OCS 应用的安装目录，升级会整个替换掉。
@@ -315,7 +324,8 @@ node check-ocs.mjs --uid <某个浏览器uid>
 
 **首选：在 OCS 设置页点一下**——「设置 → AI 助手接入（DSH）」：
 
-- 自动检测 `~/.dsh` 与 profile（DSH 跑在别的用户下时，把「DSH 目录」改成它的 `~/.dsh` 绝对路径）；
+- 自动检测 DSH 数据目录（`DSH_HOME` / `~/.dsh` / `/root/deepseek-harness` / `~/deepseek-harness`，
+  并能自动钻进 `<目录>/.dsh`）；也可以手工填——**填哪一层都行**，程序会找 `profiles/` 在哪；
 - 选 profile、确认 OCS 地址（默认 `https://127.0.0.1:<端口>`）、填密钥（没有就点「生成新密钥」，会顺手填入）；
 - 点「写入 DSH 配置」：写一段**带标记的受管块**（重复点只覆盖那一段）、自动备份、文件权限 600；
 - 卡片里会直接给出下一步（重启 DSH）和通知命令。

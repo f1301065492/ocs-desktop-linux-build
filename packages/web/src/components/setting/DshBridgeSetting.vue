@@ -28,9 +28,11 @@
 			</a-space>
 			<div class="hint">
 				{{
-					state.status?.exists
-						? '已检测到 DSH 配置目录'
-						: `没检测到 DSH（${state.status?.home || ''}）——DSH 跑在别的用户下时，填它的 ~/.dsh 绝对路径`
+					state.status?.exists && state.status?.profiles?.length
+						? `已检测到 DSH 数据目录（${state.status.home}）`
+						: state.status?.exists
+						? `这个目录里没有 profiles/（${state.status.home}）——DSH 可能装在别处（如 /root/deepseek-harness），数据就在该目录下或它下面的 .dsh/`
+						: `没检测到 DSH（${state.status?.home || ''}）—— 填 DSH 数据目录的绝对路径（里面有 profiles/）`
 				}}
 			</div>
 		</Description>
@@ -215,13 +217,17 @@ const canWrite = computed(
 async function loadStatus() {
 	state.loading = true;
 	try {
-		const status: DshBridgeStatus = await remote.methods.call('dshBridgeStatus');
+		// 带上用户填的目录：填了就按它检测（兼容 `<dir>/profiles` 与 `<dir>/.dsh/profiles` 两种布局）
+		const status: DshBridgeStatus = await remote.methods.call('dshBridgeStatus', {
+			dshHome: state.dshHome.trim() || undefined
+		});
 		state.status = status;
 		// 首次进入时给出合理的默认值
-		if (!state.dshHome) {
-			state.dshHome = status.home;
-		}
+		state.dshHome = status.home || state.dshHome;
 		if (!state.profile) {
+			state.profile = status.profiles[0] || '';
+		}
+		if (!status.profiles.includes(state.profile)) {
 			state.profile = status.profiles[0] || '';
 		}
 		if (!state.ocsBase) {

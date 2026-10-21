@@ -91,22 +91,66 @@ export function upsertManagedBlock(existing: string, block: string): string {
 	return [...kept, '', block, ''].join('\n');
 }
 
-/** DSH 配置根目录：优先 DSH_HOME，否则 ~/.dsh */
-export function dshHome(): string {
+/**
+ * 默认 DSH 根目录候选（按顺序试）。
+ *
+ * 实际部署里 DSH 的数据目录不一定叫 `~/.dsh`：比如以 root 装在 `/root/deepseek-harness`
+ * （DSH_HOME 直接指向它，`profiles/` 就在里面），或者数据在它下面的 `.dsh/`。
+ */
+export function dshHomeCandidates(): string[] {
+	const list: string[] = [];
 	const fromEnv = (process.env.DSH_HOME || '').trim();
-	return fromEnv || path.join(os.homedir(), '.dsh');
+	if (fromEnv) {
+		list.push(fromEnv);
+	}
+	list.push(path.join(os.homedir(), '.dsh'));
+	list.push('/root/deepseek-harness');
+	list.push(path.join(os.homedir(), 'deepseek-harness'));
+	return [...new Set(list)];
+}
+
+/** 默认 DSH 根目录（第一个候选；真正的挑选逻辑在 detectDsh / resolveDshHome） */
+export function dshHome(): string {
+	return dshHomeCandidates()[0];
+}
+
+/**
+ * 把用户给的目录规范化成「DSH 数据目录」（里面有 `profiles/`）。兼容两种布局：
+ *
+ * - `<dir>/profiles`       → dir 本身就是数据目录（DSH_HOME 指向它，如 /root/deepseek-harness）
+ * - `<dir>/.dsh/profiles`  → dir 是安装目录，数据在它下面的 `.dsh/`
+ *
+ * 都不匹配时原样返回，由调用方给出「找不到配置」的明确错误。
+ */
+export function resolveDshHome(input?: string): string {
+	const dir = (input || '').trim();
+	if (!dir) {
+		return dshHome();
+	}
+	for (const candidate of [dir, path.join(dir, '.dsh')]) {
+		if (fs.existsSync(path.join(candidate, 'profiles'))) {
+			return candidate;
+		}
+	}
+	return dir;
 }
 
 /**
  * 桥接脚本所在目录。
  *
  * - 打包后：`<resources>/tools/ocs-openclaw`（electron.builder.json 里用 extraResources 带上的）
- * - 开发时：仓库里的 `tools/ocs-openclaw`
+ * - 开发/测试时：仓库里的 `tools/ocs-openclaw`
+ *
+ * 这里刻意对 `app` 做防御：脱离 Electron 主进程跑单测时 `require('electron')` 拿到的是路径字符串，
+ * `app` 为 undefined——此时退回仓库路径，而不是抛错。
  */
 export function bundledBridgeDir(): string {
-	return app.isPackaged
-		? path.join(process.resourcesPath, 'tools', 'ocs-openclaw')
-		: path.resolve(app.getAppPath(), '../../tools/ocs-openclaw');
+	const electronApp = app as unknown as { isPackaged?: boolean; getAppPath?: () => string } | undefined;
+	if (electronApp?.isPackaged) {
+		return path.join(process.resourcesPath, 'tools', 'ocs-openclaw');
+	}
+	const appPath = electronApp?.getAppPath?.() || process.cwd();
+	return path.resolve(appPath, '../../tools/ocs-openclaw');
 }
 
 export interface DshStatus {
@@ -124,26 +168,46 @@ export interface DshStatus {
 	bridgeReady: boolean;
 }
 
-/** 检测本机的 DSH 与桥接脚本 */
-export function detectDsh(): DshStatus {
-	const home = dshHome();
-	const profilesDir = path.join(home, 'profiles');
-	let profiles: string[] = [];
+/**
+ * 检测本机的 DSH 与桥接脚本。
+ *
+ * @param input 可选：用户在界面上指定的目录；不传就按 `dshHomeCandidates()` 逐个试。
+ */
+export function detectDsh(input?: string): DshStatus {
+	const candidates = input && input.trim() ? [input.trim()] : dshHomeCandidates();
+
+	let picked = '';
 	let exists = false;
+	for (const raw of candidates) {
+		const resolved = resolveDshHome(raw);
+		if (fs.existsSync(path.join(resolved, 'profiles'))) {
+			picked = resolved;
+			exists = true;
+			break;
+		}
+		// 目录存在但没有 profiles/：先记下（界面会提示"数据可能在别处"）
+		if (!picked && fs.existsSync(resolved)) {
+			picked = resolved;
+			exists = true;
+		}
+	}
+	if (!picked) {
+		picked = resolveDshHome(candidates[0] || '');
+	}
+
+	const profilesDir = path.join(picked, 'profiles');
+	let profiles: string[] = [];
 	try {
 		if (fs.existsSync(profilesDir)) {
-			exists = true;
 			profiles = fs
 				.readdirSync(profilesDir, { withFileTypes: true })
 				.filter((item) => item.isDirectory())
 				.map((item) => item.name)
 				.filter((name) => PROFILE_RE.test(name))
 				.sort();
-		} else if (fs.existsSync(home)) {
-			exists = true;
 		}
 	} catch {
-		// 读不到就当没装；下面会把状态原样回给界面
+		// 读不到就当没有；下面会把状态原样回给界面
 	}
 
 	const configured: string[] = [];
@@ -160,7 +224,7 @@ export function detectDsh(): DshStatus {
 
 	const bridgeDir = bundledBridgeDir();
 	return {
-		home,
+		home: picked,
 		exists,
 		profiles,
 		configured,
@@ -212,15 +276,18 @@ export function writeDshProfile(input: DshWriteInput): DshWriteResult {
 		throw new Error(`桥接脚本不存在：${path.join(bridgeDir, 'ocs-mcp-server.mjs')}`);
 	}
 
-	// DSH 配置根目录：默认 ~/.dsh，可在界面上指定（比如 DSH 跑在别的用户下）
-	const home = (input?.dshHome || '').trim() || dshHome();
+	// DSH 数据目录：默认自动探测，也可在界面上指定（比如 /root/deepseek-harness）
+	const home = resolveDshHome(input?.dshHome);
 	if (!path.isAbsolute(home)) {
 		throw new Error('DSH 目录必须是绝对路径');
 	}
 
 	const file = path.join(home, 'profiles', profile, 'cordis.patch.yml');
 	if (!fs.existsSync(file)) {
-		throw new Error(`找不到 DSH 配置：${file}（profile 名对不对？）`);
+		throw new Error(
+			`找不到 DSH 配置：${file}\n` +
+				`（确认 ${home} 里有 profiles/。DSH 装在 /root/deepseek-harness 时，数据可能就在该目录下，也可能在它下面的 .dsh/）`
+		);
 	}
 
 	const block = renderManagedBlock({
@@ -230,20 +297,37 @@ export function writeDshProfile(input: DshWriteInput): DshWriteResult {
 		certFingerprint: input?.certFingerprint
 	});
 
-	const existing = fs.readFileSync(file, 'utf8');
+	let existing: string;
+	try {
+		existing = fs.readFileSync(file, 'utf8');
+	} catch (err) {
+		throw new Error(permissionHint(err, file));
+	}
 	const next = upsertManagedBlock(existing, block);
 
 	const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
 	const backup = `${file}.bak-${stamp}`;
-	fs.copyFileSync(file, backup);
-
-	// 里面有密钥：写的时候就把权限收到 600（Windows 上基本是空操作）
-	fs.writeFileSync(file, next, { encoding: 'utf8', mode: 0o600 });
 	try {
+		fs.copyFileSync(file, backup);
+		// 里面有密钥：写的时候就把权限收到 600（Windows 上基本是空操作）
+		fs.writeFileSync(file, next, { encoding: 'utf8', mode: 0o600 });
 		fs.chmodSync(file, 0o600);
-	} catch {
-		// 某些文件系统不支持 chmod，不影响配置本身
+	} catch (err) {
+		throw new Error(permissionHint(err, file));
 	}
 
 	return { file, backup };
+}
+
+/** 把权限类错误翻译成能直接照做的提示 */
+function permissionHint(err: unknown, file: string): string {
+	const code = (err as { code?: string })?.code;
+	const message = err instanceof Error ? err.message : String(err);
+	if (code === 'EACCES' || code === 'EPERM') {
+		return (
+			`没有权限写入 ${file}（${code}）。` +
+			`OCS 和 DSH 是不是不同的用户？要么用运行 DSH 的同一个用户跑 OCS，要么把该目录授权给运行 OCS 的用户。`
+		);
+	}
+	return `写入 ${file} 失败：${message}`;
 }

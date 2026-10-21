@@ -320,10 +320,10 @@ const methods = {
 	// ── DSH（DeepSeek Harness）接入 ──
 
 	/** 检测本机 DSH 与随应用发布的桥接脚本，并带上远程 API 的当前状态 */
-	dshBridgeStatus: () => {
+	dshBridgeStatus: (input?: { dshHome?: string }) => {
 		const api = getRemoteApiStatus();
 		return {
-			...detectDsh(),
+			...detectDsh(input?.dshHome),
 			remoteApi: {
 				enabled: api.enabled,
 				listening: api.listening,
