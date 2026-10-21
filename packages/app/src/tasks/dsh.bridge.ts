@@ -20,6 +20,234 @@ export const DSH_MARK_END = '# <<< ocs-mcp <<<';
 /** profile 名只允许安全字符，避免拼接出目录穿越 */
 const PROFILE_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+/** 目录探测结果：把「没这个目录」和「有但没权限」分开——跨用户部署时后者是常态 */
+export interface DirProbe {
+	path: string;
+	exists: boolean;
+	readable: boolean;
+	hasProfiles: boolean;
+}
+
+interface StatKind {
+	exists: boolean;
+	dir: boolean;
+	denied: boolean;
+}
+
+function statKind(target: string): StatKind {
+	try {
+		const stat = fs.statSync(target);
+		return { exists: true, dir: stat.isDirectory(), denied: false };
+	} catch (err) {
+		const code = (err as { code?: string })?.code;
+		// /root 是 0700：其他用户 stat 它的子项会 EACCES，但目录其实是存在的
+		if (code === 'EACCES' || code === 'EPERM') {
+			return { exists: true, dir: false, denied: true };
+		}
+		return { exists: false, dir: false, denied: false };
+	}
+}
+
+function probeDataRoot(dir: string): DirProbe {
+	const self = statKind(dir);
+	if (!self.exists) {
+		return { path: dir, exists: false, readable: false, hasProfiles: false };
+	}
+	if (self.denied || !self.dir) {
+		return { path: dir, exists: true, readable: false, hasProfiles: false };
+	}
+	const profiles = statKind(path.join(dir, 'profiles'));
+	return {
+		path: dir,
+		exists: true,
+		readable: !profiles.denied,
+		hasProfiles: profiles.exists && profiles.dir && !profiles.denied
+	};
+}
+
+/**
+ * 候选目录可能是数据目录（里面有 `profiles/`），也可能是安装目录（数据在它下面的 `.dsh/`）。
+ * 连读都读不了时不再往下钻——否则会得出 `/root/.dsh/.dsh` 这种假路径。
+ */
+function probeDshDir(raw: string): DirProbe {
+	const dir = (raw || '').trim();
+	if (!dir) {
+		return { path: '', exists: false, readable: false, hasProfiles: false };
+	}
+	const direct = probeDataRoot(dir);
+	if (!direct.exists || direct.hasProfiles || !direct.readable) {
+		return direct;
+	}
+	const nested = probeDataRoot(path.join(dir, '.dsh'));
+	return nested.exists ? nested : direct;
+}
+
+interface PasswdEntry {
+	name: string;
+	home: string;
+}
+
+function readPasswd(passwdPath: string): Record<number, PasswdEntry> {
+	const map: Record<number, PasswdEntry> = {};
+	let text: string;
+	try {
+		text = fs.readFileSync(passwdPath, 'utf8');
+	} catch {
+		return map;
+	}
+	for (const line of text.split(/\r?\n/)) {
+		const parts = line.split(':');
+		if (parts.length < 7) {
+			continue;
+		}
+		const uid = Number(parts[2]);
+		if (!Number.isInteger(uid)) {
+			continue;
+		}
+		map[uid] = { name: parts[0], home: parts[5] };
+	}
+	return map;
+}
+
+function readProcessUid(statusPath: string): number | undefined {
+	try {
+		const match = /^Uid:\s+(\d+)/m.exec(fs.readFileSync(statusPath, 'utf8'));
+		return match ? Number(match[1]) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function readProcessEnviron(environPath: string): Record<string, string> | undefined {
+	try {
+		const env: Record<string, string> = {};
+		for (const pair of fs.readFileSync(environPath).toString('utf8').split('\0')) {
+			const index = pair.indexOf('=');
+			if (index > 0) {
+				env[pair.slice(0, index)] = pair.slice(index + 1);
+			}
+		}
+		return env;
+	} catch {
+		return undefined;
+	}
+}
+
+function looksLikeDsh(cmdline: string): boolean {
+	return (
+		/(^|[/\s])dsh(\s|$)/.test(cmdline) || cmdline.includes('deepseek-harness') || cmdline.includes('deepseek_harness')
+	);
+}
+
+export interface DshProcess {
+	pid: number;
+	/** 运行 DSH 的用户名（从 /proc/<pid>/status 的 Uid 反查 /etc/passwd） */
+	user?: string;
+	/** 该进程可能使用的数据目录：DSH_HOME 优先，其次运行用户的 ~/.dsh */
+	homes: string[];
+}
+
+/**
+ * 从运行中的进程反推 DSH 数据目录。
+ *
+ * 为什么需要：DSH 可能在**别的用户**下运行（比如 root），OCS 以普通用户跑时既看不到
+ * 它的 `~/.dsh`（/root 是 0700），也读不了 `/proc/<pid>/environ` 里的 `DSH_HOME`；
+ * 但 `/proc/<pid>/cmdline` 与 `/proc/<pid>/status` 任何人都能读，从 Uid 反查
+ * `/etc/passwd` 就能拿到运行用户的 home → `<home>/.dsh`。
+ *
+ * @param procRoot 仅测试用，默认 /proc
+ * @param passwdPath 仅测试用，默认 /etc/passwd
+ */
+export function discoverDshProcesses(procRoot = '/proc', passwdPath = '/etc/passwd'): DshProcess[] {
+	if (!fs.existsSync(procRoot)) {
+		return [];
+	}
+	let pids: string[];
+	try {
+		pids = fs.readdirSync(procRoot).filter((name) => /^\d+$/.test(name));
+	} catch {
+		return [];
+	}
+	const passwd = readPasswd(passwdPath);
+	const found: DshProcess[] = [];
+	for (const pid of pids) {
+		const dir = path.join(procRoot, pid);
+		let cmdline: string;
+		try {
+			cmdline = fs.readFileSync(path.join(dir, 'cmdline'), 'utf8').replace(/\0/g, ' ').trim();
+		} catch {
+			continue;
+		}
+		if (!looksLikeDsh(cmdline)) {
+			continue;
+		}
+		const uid = readProcessUid(path.join(dir, 'status'));
+		const entry = uid === undefined ? undefined : passwd[uid];
+		const homes: string[] = [];
+		const envHome = (readProcessEnviron(path.join(dir, 'environ'))?.DSH_HOME || '').trim();
+		if (envHome) {
+			homes.push(envHome);
+		}
+		if (entry?.home) {
+			homes.push(path.join(entry.home, '.dsh'));
+		}
+		const unique = dedupe(homes);
+		// uid 和环境都拿不到时这个进程给不出任何候选，不必记录
+		if (unique.length > 0) {
+			found.push({ pid: Number(pid), user: entry?.name, homes: unique });
+		}
+	}
+	return found;
+}
+
+function dedupe(list: string[]): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const item of list) {
+		const value = (item || '').trim();
+		if (!value || seen.has(value)) {
+			continue;
+		}
+		seen.add(value);
+		out.push(value);
+	}
+	return out;
+}
+
+function buildCandidates(discovered: DshProcess[]): string[] {
+	const list: string[] = [];
+	// 运行中的进程最能说明问题：DSH_HOME 或运行用户的 ~/.dsh
+	for (const proc of discovered) {
+		list.push(...proc.homes);
+	}
+	const fromEnv = (process.env.DSH_HOME || '').trim();
+	if (fromEnv) {
+		list.push(fromEnv);
+	}
+	list.push(path.join(os.homedir(), '.dsh'));
+	list.push('/root/deepseek-harness');
+	list.push(path.join(os.homedir(), 'deepseek-harness'));
+	// DSH 常以单独的普通用户运行：数据在各用户的 ~/.dsh 下（OCS 以 root 跑时最有用）
+	if (process.platform !== 'win32') {
+		try {
+			for (const user of fs.readdirSync('/home')) {
+				list.push(path.join('/home', user, '.dsh'));
+			}
+		} catch {
+			// 没有 /home 或没权限：忽略
+		}
+	}
+	return dedupe(list);
+}
+
+function currentUser(): string {
+	try {
+		return os.userInfo().username;
+	} catch {
+		return '';
+	}
+}
+
 export interface DshBridgeOptions {
 	/** ocs-mcp-server.mjs 所在目录 */
 	bridgeDir: string;
@@ -92,31 +320,13 @@ export function upsertManagedBlock(existing: string, block: string): string {
 }
 
 /**
- * 默认 DSH 根目录候选（按顺序试）。
+ * 默认 DSH 数据目录候选（按顺序试）。
  *
- * 实际部署里 DSH 的数据目录不一定叫 `~/.dsh`：比如以 root 装在 `/root/deepseek-harness`
- * （DSH_HOME 直接指向它，`profiles/` 就在里面），或者数据在它下面的 `.dsh/`。
+ * 顺序：运行中的 DSH 进程 → OCS 自己的 DSH_HOME → `~/.dsh` →
+ * `/root/deepseek-harness` → `~/deepseek-harness` → 各用户的 `~/.dsh`。
  */
 export function dshHomeCandidates(): string[] {
-	const list: string[] = [];
-	const fromEnv = (process.env.DSH_HOME || '').trim();
-	if (fromEnv) {
-		list.push(fromEnv);
-	}
-	list.push(path.join(os.homedir(), '.dsh'));
-	list.push('/root/deepseek-harness');
-	list.push(path.join(os.homedir(), 'deepseek-harness'));
-	// DSH 常以单独的普通用户运行：数据在各用户的 ~/.dsh 下（OCS 以 root 跑时最有用）
-	if (process.platform !== 'win32') {
-		try {
-			for (const user of fs.readdirSync('/home')) {
-				list.push(path.join('/home', user, '.dsh'));
-			}
-		} catch {
-			// 没有 /home 或没权限：忽略
-		}
-	}
-	return [...new Set(list)];
+	return buildCandidates(discoverDshProcesses());
 }
 
 /** 默认 DSH 根目录（第一个候选；真正的挑选逻辑在 detectDsh / resolveDshHome） */
@@ -135,14 +345,13 @@ export function dshHome(): string {
 export function resolveDshHome(input?: string): string {
 	const dir = (input || '').trim();
 	if (!dir) {
-		return dshHome();
+		return dshHomeCandidates()[0] || path.join(os.homedir(), '.dsh');
 	}
-	for (const candidate of [dir, path.join(dir, '.dsh')]) {
-		if (fs.existsSync(path.join(candidate, 'profiles'))) {
-			return candidate;
-		}
+	if (probeDataRoot(dir).hasProfiles) {
+		return dir;
 	}
-	return dir;
+	const nested = path.join(dir, '.dsh');
+	return probeDataRoot(nested).hasProfiles ? nested : dir;
 }
 
 /**
@@ -166,9 +375,17 @@ export function bundledBridgeDir(): string {
 export interface DshStatus {
 	/** DSH 配置根目录 */
 	home: string;
-	/** ~/.dsh 是否存在（没装 DSH 就是 false） */
+	/** 目录是否存在（没装 DSH 就是 false） */
 	exists: boolean;
-	/** 可选的 profile 名 */
+	/** 当前 OCS 用户能否读取它（跨用户部署时会 false） */
+	readable: boolean;
+	/** 为什么找到 / 找不到：ok | missing | no-profiles | unreadable */
+	reason: 'ok' | 'missing' | 'no-profiles' | 'unreadable';
+	/** 运行 DSH 的用户（从运行中的进程反推，拿不到就没有） */
+	dshUser?: string;
+	/** 当前 OCS 进程的用户 */
+	ocsUser: string;
+	/** 可选的 profile 名（读不到时为空） */
 	profiles: string[];
 	/** 已经写过 OCS 受管块的 profile */
 	configured: string[];
@@ -181,34 +398,49 @@ export interface DshStatus {
 /**
  * 检测本机的 DSH 与桥接脚本。
  *
- * @param input 可选：用户在界面上指定的目录；不传就按 `dshHomeCandidates()` 逐个试。
+ * @param input 可选：用户在界面上指定的目录；不传就按 `dshHomeCandidates()` 逐个试
+ *              （含从运行中的 DSH 进程反推出来的位置）。
  */
 export function detectDsh(input?: string): DshStatus {
-	const candidates = input && input.trim() ? [input.trim()] : dshHomeCandidates();
+	const explicit = (input || '').trim();
+	const discovered = explicit ? [] : discoverDshProcesses();
+	const candidates = explicit ? [explicit] : buildCandidates(discovered);
 
-	let picked = '';
-	let exists = false;
+	// 优先选「能读且里面有 profiles/」的；否则退而记录第一个存在的目录，
+	// 这样跨用户时能明确告诉用户"找到了但读不了"，而不是笼统的"没检测到"
+	let chosen: DirProbe | undefined;
+	let firstExisting: DirProbe | undefined;
 	for (const raw of candidates) {
-		const resolved = resolveDshHome(raw);
-		if (fs.existsSync(path.join(resolved, 'profiles'))) {
-			picked = resolved;
-			exists = true;
+		const probe = probeDshDir(raw);
+		if (!probe.exists) {
+			continue;
+		}
+		if (!firstExisting) {
+			firstExisting = probe;
+		}
+		if (probe.readable && probe.hasProfiles) {
+			chosen = probe;
 			break;
 		}
-		// 目录存在但没有 profiles/：先记下（界面会提示"数据可能在别处"）
-		if (!picked && fs.existsSync(resolved)) {
-			picked = resolved;
-			exists = true;
-		}
-	}
-	if (!picked) {
-		picked = resolveDshHome(candidates[0] || '');
 	}
 
-	const profilesDir = path.join(picked, 'profiles');
+	const result = chosen || firstExisting;
+	const home = result?.path || candidates[0] || '';
+	const exists = Boolean(result?.exists);
+	const readable = Boolean(result?.readable);
+	const hasProfiles = Boolean(result?.hasProfiles);
+	const reason: DshStatus['reason'] = !exists
+		? 'missing'
+		: !readable
+		? 'unreadable'
+		: !hasProfiles
+		? 'no-profiles'
+		: 'ok';
+
+	const profilesDir = path.join(home, 'profiles');
 	let profiles: string[] = [];
 	try {
-		if (fs.existsSync(profilesDir)) {
+		if (readable && fs.existsSync(profilesDir)) {
 			profiles = fs
 				.readdirSync(profilesDir, { withFileTypes: true })
 				.filter((item) => item.isDirectory())
@@ -232,10 +464,19 @@ export function detectDsh(input?: string): DshStatus {
 		}
 	}
 
+	const matchedProc = discovered.find(
+		(proc) => proc.homes.includes(home) || proc.homes.includes(path.join(home, '.dsh'))
+	);
+	const dshUser = matchedProc?.user || discovered[0]?.user;
+
 	const bridgeDir = bundledBridgeDir();
 	return {
-		home: picked,
+		home,
 		exists,
+		readable,
+		reason,
+		dshUser,
+		ocsUser: currentUser(),
 		profiles,
 		configured,
 		bridgeDir,
@@ -296,7 +537,8 @@ export function writeDshProfile(input: DshWriteInput): DshWriteResult {
 	if (!fs.existsSync(file)) {
 		throw new Error(
 			`找不到 DSH 配置：${file}\n` +
-				`（确认 ${home} 里有 profiles/。DSH 装在 /root/deepseek-harness 时，数据可能就在该目录下，也可能在它下面的 .dsh/）`
+				`（${home} 里没有 profiles/。若 DSH 由其他用户运行，OCS 可能看不到它的数据目录——` +
+				`用运行 DSH 的用户执行 setup-same-host.sh 更省事）`
 		);
 	}
 
@@ -334,9 +576,12 @@ function permissionHint(err: unknown, file: string): string {
 	const code = (err as { code?: string })?.code;
 	const message = err instanceof Error ? err.message : String(err);
 	if (code === 'EACCES' || code === 'EPERM') {
+		const dshUser = discoverDshProcesses()[0]?.user;
+		const ocsUser = currentUser();
+		const who = dshUser ? `DSH 由 ${dshUser} 运行，而 OCS 当前用户是 ${ocsUser}。` : `OCS 和 DSH 是不是不同的用户？`;
 		return (
 			`没有权限写入 ${file}（${code}）。` +
-			`OCS 和 DSH 是不是不同的用户？要么用运行 DSH 的同一个用户跑 OCS，要么把该目录授权给运行 OCS 的用户。`
+			`${who}要么用运行 DSH 的同一个用户跑 OCS，要么用 root 执行 setup-same-host.sh（设置页里有可复制的命令）。`
 		);
 	}
 	return `写入 ${file} 失败：${message}`;

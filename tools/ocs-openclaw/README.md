@@ -279,16 +279,20 @@ ls "/opt/OCS Desktop/resources/app" >/dev/null && echo "OCS 装在本机"
 ps -ef | grep -i -E "dsh|harness" | grep -v grep      # 记下 DSH 是怎么起的（systemd？手动 dsh web？）
 ```
 
-**DSH 数据目录不一定是 `~/.dsh`。** 常见几种布局（设置页的「DSH 目录」填哪一层都行，
-程序会依次认 `<目录>/profiles` 与 `<目录>/.dsh/profiles`）：
+**DSH 数据目录一般是 `$HOME/.dsh`**（`dsh web` 用 `profiles/<名字>`，桌面 App 用 `profiles/desktop`），
+但 DSH 可能以**别的用户**运行（常见：DSH 用 root、OCS 用普通用户）。OCS ≥ 2.13.11 的设置页会自动检测：
 
-| 情况 | 填什么 | 判断方法 |
-| --- | --- | --- |
-| DSH_HOME 指向某个目录（如 `/root/deepseek-harness`） | 该目录本身 | `ls /root/deepseek-harness` 里能看到 `profiles/` |
-| DSH 装在目录里、数据在它的 `.dsh/` 下 | 安装目录 | `ls <安装目录>/.dsh` 里能看到 `profiles/` |
-| 默认布局 / DSH 以普通用户运行 | `~/.dsh` 或 `/home/<user>/.dsh` | `ls ~/.dsh/profiles` 有内容 |
+- 先扫 `/proc/<pid>/cmdline` 找运行中的 DSH 进程，读 `/proc/<pid>/status` 的 Uid 反查 `/etc/passwd`
+  得到运行用户的 home → `<home>/.dsh`；同用户时还会直接读进程的 `DSH_HOME`；
+- 再依次试 OCS 自己的 `DSH_HOME`、`~/.dsh`、`/root/deepseek-harness`、`~/deepseek-harness`、`/home/*/.dsh`；
+- 每个候选都同时认 `<目录>/profiles` 与 `<目录>/.dsh/profiles`；
+- 找到但**当前 OCS 用户读不了**时不会说"没检测到"，而是明确显示
+  「检测到 X，但当前用户（A）无权读取——DSH 由 B 运行」，并在卡片上给出可复制的 root 命令。
 
-**都不确定时，直接把数据目录找出来**（最可靠）：
+> 跨用户时即使检测到了也写不进去（`/root` 是 0700）：用卡片上的 root 命令跑
+> `setup-same-host.sh`，或者把 DSH 改成和 OCS 同一个用户运行。
+
+**都不确定时，手工定位**（最可靠）：
 
 ```bash
 # ① 看 DSH 进程实际用的 HOME / DSH_HOME
@@ -298,6 +302,7 @@ find /root /home /opt /var -maxdepth 6 -type f -name 'cordis.patch.yml' 2>/dev/n
 ```
 
 > `/root/deepseek-harness` 只是**源码/安装**目录时，里面不会有 `profiles/`——数据在 `DSH_HOME` 或运行用户的 `~/.dsh` 下。
+> 实测例：源码在 `/root/deepseek-harness`、进程环境 `DSH_HOME=/root/.dsh` → 数据目录就是 `/root/.dsh`，profile 为 `web`。
 
 ### 1. 放脚本（别放进 OCS 的安装目录）
 

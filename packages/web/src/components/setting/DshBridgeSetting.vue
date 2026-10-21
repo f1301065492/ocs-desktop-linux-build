@@ -26,16 +26,31 @@
 					重新检测
 				</a-button>
 			</a-space>
-			<div class="hint">
-				{{
-					state.status?.exists && state.status?.profiles?.length
-						? `已检测到 DSH 数据目录（${state.status.home}）`
-						: state.status?.exists
-						? `这个目录里没有 profiles/（${state.status.home}）——DSH 数据可能在别的用户目录下，或它下面的 .dsh/`
-						: `没检测到 DSH（${state.status?.home || ''}）—— 填 DSH 数据目录的绝对路径（里面有 profiles/）`
-				}}
+			<div class="hint">{{ homeHint }}</div>
+			<div
+				v-if="state.status?.reason === 'unreadable'"
+				class="hint"
+			>
+				跨用户读写不了。用 root 在终端执行：
+				<div class="break mt-1">
+					<code>{{ rootCommand }}</code>
+					<a-button
+						size="mini"
+						class="ms-2"
+						@click="copyRootCommand"
+					>
+						复制
+					</a-button>
+				</div>
+				<div class="mt-1">
+					或者把 DSH 改成和 OCS 同一个用户运行（用哪个用户跑 DSH，配置就写在它的 ~/.dsh 下）。
+					写完重启 DSH，以聊天里是否出现 <code>mcp__ocs__*</code> 为准；OCS 读不到那份文件，卡片上不会显示"已配置"。
+				</div>
 			</div>
-			<div class="hint">
+			<div
+				v-else
+				class="hint"
+			>
 				找不到时：在终端里跑
 				<code>find /root /home /opt /var -maxdepth 6 -type f -name 'cordis.patch.yml' 2>/dev/null</code>
 				，它的上两级目录就是数据目录（也可以用 DSH 进程的 <code>DSH_HOME</code>/<code>HOME</code> 确认）。
@@ -185,6 +200,10 @@ import { remote } from '../../utils/remote';
 interface DshBridgeStatus {
 	home: string;
 	exists: boolean;
+	readable: boolean;
+	reason: 'ok' | 'missing' | 'no-profiles' | 'unreadable';
+	dshUser?: string;
+	ocsUser: string;
 	profiles: string[];
 	configured: string[];
 	bridgeDir: string;
@@ -211,6 +230,39 @@ const state = reactive({
 });
 
 const profileOptions = computed(() => (state.status?.profiles || []).map((name) => ({ label: name, value: name })));
+
+const homeHint = computed(() => {
+	const status = state.status;
+	if (!status) {
+		return '正在检测…';
+	}
+	switch (status.reason) {
+		case 'ok':
+			return `已检测到 DSH 数据目录（${status.home}）`;
+		case 'unreadable':
+			return `检测到 DSH 数据目录 ${status.home}，但当前 OCS 用户${
+				status.ocsUser ? `（${status.ocsUser}）` : ''
+			}无权读取${status.dshUser ? `——DSH 由 ${status.dshUser} 运行` : ''}`;
+		case 'no-profiles':
+			return `${status.home} 里没有 profiles/——可能不是 DSH 数据目录，试试它下面的 .dsh/`;
+		default:
+			return `没检测到 DSH（最后尝试：${status.home || '常见位置'}）——可以手工填数据目录的绝对路径`;
+	}
+});
+
+/** 权限不够时给用户一条能在终端直接执行的 root 命令 */
+const rootCommand = computed(() => {
+	const status = state.status;
+	if (!status?.home) {
+		return '';
+	}
+	const bridgeDir = status.bridgeDir;
+	return [
+		`sudo bash "${bridgeDir}/setup-same-host.sh"`,
+		`--dsh-home "${status.home}"`,
+		`--bridge-dir "${bridgeDir}"`
+	].join(' ');
+});
 
 const canWrite = computed(
 	() =>
@@ -284,6 +336,15 @@ async function copyWatchCommand() {
 	const command = `node ${state.status?.bridgeDir}/ocs-watch.mjs --loop --every 60 --deliver dsh`;
 	try {
 		await navigator.clipboard.writeText(command);
+		Message.success('已复制');
+	} catch {
+		Message.warning('复制失败，请手动选中复制');
+	}
+}
+
+async function copyRootCommand() {
+	try {
+		await navigator.clipboard.writeText(rootCommand.value);
 		Message.success('已复制');
 	} catch {
 		Message.warning('复制失败，请手动选中复制');

@@ -83,8 +83,23 @@ else
 	for candidate in /home/*/.dsh; do
 		[ -d "$candidate" ] && CANDIDATES+=("$candidate")
 	done
+	# 再从运行中的 DSH 进程反推：别的用户运行 DSH 时，它的数据目录通常不在上面的候选里。
+	# /proc/<pid>/cmdline 与 status 任何用户可读；environ（含 DSH_HOME）只在同用户/root 时可读。
+	for proc in /proc/[0-9]*; do
+		cmdline=$(tr '\0' ' ' <"$proc/cmdline" 2>/dev/null || true)
+		case "$cmdline" in
+			*dsh* | *deepseek-harness* | *deepseek_harness*) ;;
+			*) continue ;;
+		esac
+		uid=$(awk '/^Uid:/ { print $2; exit }' "$proc/status" 2>/dev/null || true)
+		[ -n "$uid" ] || continue
+		home=$(awk -F: -v uid="$uid" '$3 == uid { print $6; exit }' /etc/passwd 2>/dev/null || true)
+		envhome=$(tr '\0' '\n' <"$proc/environ" 2>/dev/null | sed -n 's/^DSH_HOME=//p' | head -n 1 || true)
+		[ -n "$envhome" ] && CANDIDATES+=("$envhome")
+		[ -n "$home" ] && CANDIDATES+=("$home/.dsh")
+	done
 	RESOLVED_DSH="$(resolve_dsh_home "${CANDIDATES[@]}")" ||
-		fail "没找到 DSH 数据目录（试过 ~/.dsh、/root/.dsh、/root/deepseek-harness、~/deepseek-harness、/home/*/.dsh 及其下的 .dsh）。用 --dsh-home <目录> 指定"
+		fail "没找到 DSH 数据目录（试过 ~/.dsh、/root/.dsh、/root/deepseek-harness、~/deepseek-harness、/home/*/.dsh、运行中 DSH 进程的 DSH_HOME 及其下的 .dsh）。用 --dsh-home <目录> 指定"
 fi
 DSH_HOME="$RESOLVED_DSH"
 info "DSH 数据目录: $DSH_HOME"
