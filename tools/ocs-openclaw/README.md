@@ -243,7 +243,7 @@ node check-ocs.mjs --uid <某个浏览器uid>
 
 ```bash
 node check-ocs.mjs --uid <uid>   # 对着**真实** OCS 自检（在机器 B 上跑），逐项给结论
-node test/run.mjs                 # 假 OCS + 50 项断言，不碰真机：
+node test/run.mjs                 # 假 OCS + 52 项断言，不碰真机：
                                   # 证书固定/密钥校验/错误码、MCP 握手与工具、推送的基线/去重/掉线提醒
 node test/serve-mock.mjs          # 手动玩：打印可复制的 OCS_BASE/KEY/指纹，每 20 秒追加一行日志
 ```
@@ -251,7 +251,7 @@ node test/serve-mock.mjs          # 手动玩：打印可复制的 OCS_BASE/KEY/
 不碰真机也能验证这几个脚本：
 
 ```bash
-node test/run.mjs         # 起假 OCS（HTTPS+自签证书），跑 50 项断言：
+node test/run.mjs         # 起假 OCS（HTTPS+自签证书），跑 52 项断言：
                           # 证书固定/密钥校验/错误码、MCP 握手与工具、推送的基线/去重/掉线提醒
 node test/serve-mock.mjs  # 手动玩：打印可复制的 OCS_BASE/KEY/指纹，每 20 秒追加一行日志
 ```

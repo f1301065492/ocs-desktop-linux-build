@@ -152,7 +152,29 @@ async function deliver(args, result) {
 
 function loadState(file) {
 	try {
-		return JSON.parse(fs.readFileSync(file, 'utf8'));
+		const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+			return { browsers: {}, lastError: '' };
+		}
+		if (!parsed.browsers || typeof parsed.browsers !== 'object' || Array.isArray(parsed.browsers)) {
+			parsed.browsers = {};
+		}
+		// 旧版本用 seen（哈希数组），新版本用 tail（尾部行数组）。
+		// 统一规范化，避免升级后旧进程/旧文件触发 undefined.length 之类的异常。
+		for (const [uid, record] of Object.entries(parsed.browsers)) {
+			if (!record || typeof record !== 'object' || Array.isArray(record)) {
+				parsed.browsers[uid] = { status: '', tail: [] };
+				continue;
+			}
+			if (!Array.isArray(record.tail)) {
+				record.tail = [];
+			}
+			delete record.seen;
+		}
+		if (typeof parsed.lastError !== 'string') {
+			parsed.lastError = '';
+		}
+		return parsed;
 	} catch {
 		return { browsers: {}, lastError: '' };
 	}
@@ -282,6 +304,8 @@ async function runOnce(cfg, args, patterns) {
 	} catch (err) {
 		// 连不上：只在「从正常变成连不上」时提醒一次，恢复时再提醒一次
 		const message = err && err.message ? err.message : String(err);
+		// 把堆栈打到 stderr：一次性的代码异常也有据可查（设置页「最近输出」会采集）
+		console.error(`[ocs-watch] 本轮检查异常：${err && err.stack ? err.stack : message}`);
 		if (state.lastError !== message) {
 			state.lastError = message;
 			saveState(args.state, state);

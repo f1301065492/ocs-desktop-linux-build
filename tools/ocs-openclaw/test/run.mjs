@@ -297,6 +297,17 @@ console.log('\n=== ocs-watch（推送）===');
 	checkMatch('结构化通知包含行内容', parentRun.out, /需要人工处理/);
 	check('parent 模式不在 stdout 打印人类可读文本', /【OCS 提醒】/.test(parentRun.out), false);
 
+	// 旧版本 state（整行哈希 seen）与损坏记录都要能平滑升级，不能触发类型错误
+	const legacyState = path.join(workDir, 'watch-state-legacy.json');
+	fs.writeFileSync(
+		legacyState,
+		JSON.stringify({ browsers: { [UID]: { status: 'launched', seen: ['deadbeef'] } }, lastError: '' })
+	);
+	check('旧版 seen 状态文件可平滑升级', await runWatch(env, legacyState), 'HEARTBEAT_OK');
+	const brokenState = path.join(workDir, 'watch-state-broken.json');
+	fs.writeFileSync(brokenState, JSON.stringify({ browsers: { [UID]: null }, lastError: 123 }));
+	check('损坏的 state 记录不会报连不上', await runWatch(env, brokenState), 'HEARTBEAT_OK');
+
 	mock.setStatus(UID, 'closed');
 	const fourth = await runWatch(env, stateFile);
 	checkMatch('状态变化会播报', fourth, /状态：launched → closed/);
