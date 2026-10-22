@@ -29,7 +29,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { diffTail } from './tail-diff.mjs';
 import { loadConfig, OcsApi } from './ocs-client.mjs';
 
 /** 默认只播报这些：登录结果、验证码、失败与异常、初始化完成 */
@@ -42,8 +42,8 @@ const DEFAULT_PATTERNS = [
 	'初始化完成|浏览器已启动|已提交登录表单'
 ];
 
-/** 每个浏览器保留多少条「已播报」指纹：够覆盖一轮日志尾部即可，避免状态文件无限膨胀 */
-const SEEN_LIMIT = 400;
+/** 每个浏览器保留多少行日志尾部，用于下一轮做增量比较 */
+const TAIL_LIMIT = 120;
 
 function parseArgs(argv) {
 	const args = {
@@ -156,10 +156,6 @@ function saveState(file, state) {
 	}
 }
 
-function hashLine(text) {
-	return createHash('sha1').update(text).digest('hex').slice(0, 16);
-}
-
 /** 日志里形如 `[错误] 2026/10/15 10:52:40 \t 自动化脚本错误：...`，这里只按关键字筛，保留原样 */
 function compilePatterns(env) {
 	const custom = (env.OCS_WATCH_PATTERNS || '').trim();
@@ -193,7 +189,7 @@ async function inspect(cfg, args, state, patterns) {
 		if (args.uid && browser.uid !== args.uid) {
 			continue;
 		}
-		const record = state.browsers[browser.uid] || (state.browsers[browser.uid] = { status: '', seen: [] });
+		const record = state.browsers[browser.uid] || (state.browsers[browser.uid] = { status: '', tail: [] });
 		const label = `${browser.name || '(未命名)'} [${String(browser.uid).slice(0, 8)}]`;
 
 		// 1. 状态变化：第一次见到只记基线，不播报（否则装上就刷一轮）
@@ -217,27 +213,30 @@ async function inspect(cfg, args, state, patterns) {
 		if (!text) {
 			continue;
 		}
-		const seen = new Set(record.seen);
-		const fresh = [];
-		// 首次见到这个浏览器的日志（seen 为空）：整轮只做基线，不播报历史内容。
-		// 注意是「整轮」而不是「第一行」——按行判断会让同一次拉取里的后续行照样播报出去。
-		const isFirstPass = record.seen.length === 0;
-		for (const raw of text.split('\n')) {
-			const line = raw.trim();
-			if (!line) {
-				continue;
-			}
-			const id = hashLine(line);
-			if (seen.has(id)) {
-				continue;
-			}
-			record.seen.push(id);
-			if (!isFirstPass && (args.all || interesting(line, patterns))) {
-				fresh.push(line);
+		const currTail = text
+			.split('\n')
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.slice(-TAIL_LIMIT);
+		const prevTail = Array.isArray(record.tail) ? record.tail : [];
+		// 首次见到这个浏览器：只记基线，不播报历史内容
+		const isFirstPass = prevTail.length === 0;
+		let fresh = [];
+		if (!isFirstPass) {
+			// 按「尾部增量」而不是「整行哈希」判断新增：
+			// 同样的错误文本再次出现时也算一条新事件，不会被永久吞掉
+			for (const line of diffTail(prevTail, currTail)) {
+				if (args.all || interesting(line, patterns)) {
+					fresh.push(line);
+				}
 			}
 		}
-		if (record.seen.length > SEEN_LIMIT) {
-			record.seen = record.seen.slice(-SEEN_LIMIT);
+		record.tail = currTail;
+		// 旧版本状态文件里的字段，顺手清掉
+		delete record.seen;
+		// 日志被清空/重置时可能一次多出很多行，限制单轮播报条数
+		if (fresh.length > 20) {
+			fresh = fresh.slice(-20);
 		}
 		if (fresh.length) {
 			lines.push(`${label}\n${fresh.map((item) => `  · ${item}`).join('\n')}`);

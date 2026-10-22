@@ -284,6 +284,12 @@ console.log('\n=== ocs-watch（推送）===');
 	const third = await runWatch(env, stateFile);
 	check('同一行不会重复播报', third, 'HEARTBEAT_OK');
 
+	// 同样的文本再次出现（例如每次登录失败都是同一句错误）必须仍然播报，
+	// 否则「消息未推送」——旧实现按整行哈希去重会永久吞掉
+	mock.appendLog(UID, '智慧树：检测到验证码，需要人工处理\n');
+	const repeated = await runWatch(env, stateFile);
+	checkMatch('重复出现的同一行仍会播报', repeated, /需要人工处理/);
+
 	mock.setStatus(UID, 'closed');
 	const fourth = await runWatch(env, stateFile);
 	checkMatch('状态变化会播报', fourth, /状态：launched → closed/);
