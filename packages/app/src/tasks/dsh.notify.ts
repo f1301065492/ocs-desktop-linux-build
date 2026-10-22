@@ -200,15 +200,18 @@ export async function testDshNotify(
 	try {
 		const { data } = await axios.post(
 			url,
-			{ botId: cfg.botId, targetId: cfg.targetId, text: 'OCS 通知通道测试', format: 'text' },
+			// DSH 的投递接口只接受 plain / markdown；早先写成 text 会被判 400
+			{ botId: cfg.botId, targetId: cfg.targetId, text: 'OCS 通知通道测试', format: 'plain' },
 			{ timeout: 8000 }
 		);
 		getLogger().info('通知测试已发送');
 		return { ok: true, response: data };
 	} catch (err) {
+		const detail = (err as { response?: { data?: unknown } })?.response?.data;
 		const message = err instanceof Error ? err.message : String(err);
-		getLogger().warn(`通知测试失败：${message}`);
-		return { ok: false, message };
+		const suffix = detail === undefined ? '' : `：${typeof detail === 'string' ? detail : JSON.stringify(detail)}`;
+		getLogger().warn(`通知测试失败：${message}${suffix}`);
+		return { ok: false, message: message + suffix };
 	}
 }
 
