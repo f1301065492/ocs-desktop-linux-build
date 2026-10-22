@@ -83,11 +83,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h } from 'vue';
+import { computed, h, ref } from 'vue';
 import { fetchRemoteNotify, date, about, getRemoteInfos } from '../utils';
 import { remote } from '../utils/remote';
 import TitleLink from './TitleLink.vue';
-import { Message, Modal } from '@arco-design/web-vue';
+import { Message, Modal, InputPassword } from '@arco-design/web-vue';
 import { store } from '../store/index';
 import { router } from '../route';
 import { electron } from '../utils/node';
@@ -131,6 +131,48 @@ function allNotify() {
 	fetchRemoteNotify(true);
 }
 
+/** 可移植数据格式前缀（与主进程 crypto.ts 保持一致） */
+const PORTABLE_PREFIX = 'ocsdata:v2:';
+
+/** 弹窗输入密码；取消返回 null */
+function askPassword(title: string, tip: string): Promise<string | null> {
+	return new Promise((resolve) => {
+		let settled = false;
+		const password = ref('');
+		const finish = (value: string | null) => {
+			if (settled) return;
+			settled = true;
+			resolve(value);
+		};
+		Modal.open({
+			title,
+			content: () =>
+				h('div', [
+					h('div', { style: 'margin-bottom: 8px; color: var(--color-text-3); font-size: 12px;' }, tip),
+					h(InputPassword, {
+						modelValue: password.value,
+						placeholder: '至少 4 个字符',
+						'onUpdate:modelValue': (value: string) => {
+							password.value = value;
+						}
+					})
+				]),
+			okText: '确定',
+			cancelText: '取消',
+			onOk: () => {
+				if (password.value.trim().length < 4) {
+					Message.warning('密码至少 4 个字符');
+					return false;
+				}
+				finish(password.value);
+				return true;
+			},
+			onCancel: () => finish(null),
+			onClose: () => finish(null)
+		});
+	});
+}
+
 function importData() {
 	remote.dialog
 		.call('showOpenDialog', {
@@ -147,8 +189,35 @@ function importData() {
 					// 如果 render 是加密字符串，先解密为明文再导入
 					if (typeof _store.render === 'string') {
 						const renderStr = _store.render as string;
-						const data = JSON.parse(remote.methods.callSync('decryptRenderString' as any, renderStr) as string);
-						(_store as any).render = data;
+						if (renderStr.startsWith(PORTABLE_PREFIX)) {
+							// 可移植格式：用导出时设置的密码解密
+							const password = await askPassword('输入导出密码', '这份数据是用密码加密的，请输入导出时设置的密码。');
+							if (!password) {
+								Message.warning('已取消导入');
+								return;
+							}
+							try {
+								const data = JSON.parse(
+									remote.methods.callSync('decryptPortable' as any, renderStr, password) as string
+								);
+								(_store as any).render = data;
+							} catch {
+								Message.error('密码错误或数据已损坏，无法解密');
+								return;
+							}
+						} else {
+							// 旧格式：用本机密钥链的 AES 密钥解密，只能在同一台机器/同一用户下使用
+							try {
+								const data = JSON.parse(remote.methods.callSync('decryptRenderString' as any, renderStr) as string);
+								(_store as any).render = data;
+							} catch {
+								Message.error(
+									'这份数据是用导出电脑的本地密钥加密的，当前电脑无法解密。' +
+										'请在原电脑升级到新版后重新导出（会提示设置密码），再到这里导入。'
+								);
+								return;
+							}
+						}
 					}
 
 					const root = _store.render.browser.root;
@@ -203,10 +272,16 @@ function importData() {
 function exportData() {
 	Modal.confirm({
 		title: '导出数据',
-		content: '数据中包含自动化程序的配置（例如账号密码），请小心保存防止泄露。导出后可在其他电脑中恢复数据。',
+		content:
+			'数据中包含自动化程序的配置（例如账号密码），请小心保存防止泄露。' +
+			'导出时会让你设置一个密码，换电脑导入时需要输入它；忘记密码将无法恢复。',
 		okText: '确认',
 		cancelText: '取消',
-		onOk() {
+		onOk: async () => {
+			const password = await askPassword('设置导出密码', '换电脑导入时需要输入这个密码；请妥善保存，忘记后无法恢复。');
+			if (!password) {
+				return;
+			}
 			remote.dialog
 				.call('showSaveDialog', {
 					title: '选择导出位置',
@@ -238,11 +313,12 @@ function exportData() {
 							}
 						}
 
-						// 导出前加密 render 数据，防止明文泄露
+						// 导出前用密码加密 render 数据：跨机器可解，同时避免明文泄露
 						if (typeof _store.render !== 'string') {
 							(_store as any).render = remote.methods.callSync(
-								'encryptRenderString' as any,
-								JSON.stringify(_store.render)
+								'encryptPortable' as any,
+								JSON.stringify(_store.render),
+								password
 							) as string;
 						}
 

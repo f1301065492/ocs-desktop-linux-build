@@ -3,7 +3,18 @@ import crypto from 'crypto';
 import keytar from 'keytar';
 import { Logger } from './logger';
 
-const logger = Logger('crypto');
+let cachedLogger: ReturnType<typeof Logger> | null = null;
+/** 延迟创建 logger：脱离 Electron 跑单测时没有 app，退回 console */
+function getLogger(): ReturnType<typeof Logger> {
+	if (!cachedLogger) {
+		try {
+			cachedLogger = Logger('crypto');
+		} catch {
+			cachedLogger = console as unknown as ReturnType<typeof Logger>;
+		}
+	}
+	return cachedLogger;
+}
 
 // --- 常量 ---
 const SERVICE_NAME = 'ocs-desktop';
@@ -31,17 +42,17 @@ export async function initAesKey(): Promise<void> {
 		const hex = await keytar.getPassword(SERVICE_NAME, ACCOUNT_NAME);
 		if (hex) {
 			cachedAesKey = Buffer.from(hex, 'hex');
-			logger.info('从密钥链加载 AES 密钥');
+			getLogger().info('从密钥链加载 AES 密钥');
 			return;
 		}
 
 		// 密钥链中没有，生成新密钥并存入
 		cachedAesKey = crypto.randomBytes(32);
 		await keytar.setPassword(SERVICE_NAME, ACCOUNT_NAME, cachedAesKey.toString('hex'));
-		logger.info('生成新 AES 密钥并存入密钥链');
+		getLogger().info('生成新 AES 密钥并存入密钥链');
 	} catch (e) {
 		// keytar 不可用时 cachedAesKey 保持 null，所有加解密走 safeStorage
-		logger.warn('keytar 初始化失败，使用 safeStorage 方案', e);
+		getLogger().warn('keytar 初始化失败，使用 safeStorage 方案', e);
 	}
 }
 
@@ -107,6 +118,57 @@ export function decryptAes(ciphertext: string): string {
 	let decrypted = decipher.update(data, 'base64', 'utf8');
 	decrypted += decipher.final('utf8');
 	return decrypted;
+}
+
+// ────────────────────────────────────────────
+//  可移植加密（导出/导入跨机器）
+// ────────────────────────────────────────────
+
+/** 可移植格式前缀 */
+export const PORTABLE_PREFIX = 'ocsdata:v2:';
+
+/**
+ * 用用户密码加密（跨机器可解）。
+ *
+ * 本机密钥链方案只能在同一台机器/同一个用户下解密，导出到别的电脑会报
+ * "Unsupported state or unable to authenticate data"。可移植格式改用密码派生密钥
+ * （scrypt + 随机盐），换机器只需输入同一个密码。
+ *
+ * 格式：`ocsdata:v2:<salt>:<iv>:<tag>:<ciphertext>`（base64）
+ */
+export function encryptPortable(plaintext: string, password: string): string {
+	const salt = crypto.randomBytes(16);
+	const iv = crypto.randomBytes(12);
+	const key = crypto.scryptSync(password, salt, 32);
+	const cipher = crypto.createCipheriv('aes-256-gcm', toBytes(key), toBytes(iv));
+	let data = cipher.update(plaintext, 'utf8', 'base64');
+	data += cipher.final('base64');
+	const tag = cipher.getAuthTag();
+	return PORTABLE_PREFIX + [salt, iv, tag].map((item) => item.toString('base64')).join(':') + ':' + data;
+}
+
+/** 判断是否为可移植格式 */
+export function isPortableData(value: unknown): boolean {
+	return typeof value === 'string' && value.startsWith(PORTABLE_PREFIX);
+}
+
+/** 用密码解密可移植数据；密码错误会抛出 GCM 校验失败 */
+export function decryptPortable(payload: string, password: string): string {
+	if (!isPortableData(payload)) {
+		throw new Error('不是可移植格式的数据');
+	}
+	const parts = String(payload).slice(PORTABLE_PREFIX.length).split(':');
+	if (parts.length < 4) {
+		throw new Error('可移植数据格式不完整');
+	}
+	const salt = Buffer.from(parts[0], 'base64');
+	const iv = Buffer.from(parts[1], 'base64');
+	const tag = Buffer.from(parts[2], 'base64');
+	const data = parts.slice(3).join(':');
+	const key = crypto.scryptSync(password, salt, 32);
+	const decipher = crypto.createDecipheriv('aes-256-gcm', toBytes(key), toBytes(iv));
+	decipher.setAuthTag(toBytes(tag));
+	return decipher.update(data, 'base64', 'utf8') + decipher.final('utf8');
 }
 
 // ────────────────────────────────────────────

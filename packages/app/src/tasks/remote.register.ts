@@ -17,7 +17,7 @@ import { AutomationScripts } from '../scripts';
 import { AutomationScript } from '../scripts/script';
 import { getBrowserMajorVersion, getExtensionPaths } from '../utils/browser';
 import { AppStore } from '../../types';
-import { encryptRenderString, decryptRenderString } from '../crypto';
+import { encryptRenderString, decryptRenderString, encryptPortable, decryptPortable } from '../crypto';
 import { attachRendererWindow, getRemoteApiStatus, restartRemoteApi } from './remote.api';
 import {
 	clearApiKey,
@@ -263,6 +263,9 @@ const methods = {
 	},
 	encryptRenderString,
 	decryptRenderString,
+	// 可移植（密码）加解密：导出/导入跨机器用
+	encryptPortable,
+	decryptPortable,
 	/** 一次性完成加密和存储，避免二次 IPC 调用 */
 	saveStore: (plainStoreJson: string, shouldEncrypt: boolean): void => {
 		const storeData: AppStore = JSON.parse(plainStoreJson);
