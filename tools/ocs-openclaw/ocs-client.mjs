@@ -20,14 +20,18 @@ import { URL } from 'node:url';
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 /**
- * 显式关掉连接复用。
+ * 显式关掉连接复用与 TLS 会话缓存。
  *
  * Node 19 起全局 agent 默认开启 keepAlive，会带来两个坑（都踩过）：
  * 1. 复用连接意味着**不会重新握手**，`secureConnect` 不再触发，证书指纹检查被静默跳过；
  * 2. 保活的 socket 会一直吊着事件循环，`node ocs-watch.mjs --once` 这类一次性脚本不退出。
- * 这套工具调用频率很低，每次重新握手完全可以接受。
+ *
+ * `maxCachedSessions: 0` 同样必要：TLS 1.3 的会话票据（session ticket）会让后续连接
+ * 走 PSK 恢复，**服务器不再发送证书**，`getPeerCertificate()` 返回空对象——指纹校验
+ * 于是误报「实际为空」。关掉会话缓存后每次都是完整握手，指纹始终可读。
+ * 这套工具调用频率很低，多一次完整握手的开销可以忽略。
  */
-const agent = new https.Agent({ keepAlive: false, maxSockets: 8 });
+const agent = new https.Agent({ keepAlive: false, maxSockets: 8, maxCachedSessions: 0 });
 
 /** 读取并校验配置；缺关键项直接抛错，避免带着半个配置去调接口 */
 export function loadConfig(env = process.env) {
@@ -104,6 +108,11 @@ export function request(cfg, method, path, { query, body, timeoutMs } = {}) {
 			socket.on('secureConnect', () => {
 				const actual = socket.getPeerCertificate?.()?.fingerprint256 || '';
 				if (cfg.fingerprint) {
+					// 拿不到指纹时不能放行：TLS 1.3 会话复用不会重发证书，空指纹 ≠ 校验通过
+					if (!actual) {
+						req.destroy(new Error('TLS 握手未取到证书指纹（可能复用了会话票据），无法完成指纹固定校验'));
+						return;
+					}
 					if (normalizeFingerprint(actual) !== normalizeFingerprint(cfg.fingerprint)) {
 						req.destroy(new Error(`证书指纹不匹配：配置 ${cfg.fingerprint}，实际 ${actual}`));
 					}
