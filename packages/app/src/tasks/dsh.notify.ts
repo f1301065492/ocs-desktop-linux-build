@@ -220,7 +220,15 @@ function cleanNotifyLine(line: string): string {
 /** 按内容挑一个图标，让推送更好扫读 */
 function lineIcon(line: string): string {
 	if (line.startsWith('状态：')) {
-		return '🔄';
+		const to = line.split('→').pop()?.trim() || '';
+		const statusIcons: Record<string, string> = {
+			运行中: '🟢',
+			启动中: '🟡',
+			已关闭: '⚪',
+			关闭中: '🟠',
+			失联: '🟠'
+		};
+		return statusIcons[to] || '🔄';
 	}
 	if (/验证码|需要人工|人工处理|人工输入/.test(line)) {
 		return '⚠️';
