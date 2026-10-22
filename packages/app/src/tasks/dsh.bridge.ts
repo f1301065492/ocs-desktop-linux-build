@@ -20,6 +20,14 @@ const execFileAsync = promisify(execFile);
 /** 受管块起止标记（改这里要同步改 README 里的说明与 setup-same-host.sh） */
 export const DSH_MARK_START = '# >>> ocs-mcp (managed by OCS Desktop) >>>';
 export const DSH_MARK_END = '# <<< ocs-mcp <<<';
+/**
+ * 任意来源的受管块起始行。
+ *
+ * 一键脚本（setup-same-host.sh）和设置页写过不同后缀的起始标记；如果各自只认自己的，
+ * 两次写入就会留下**两份** `serverName: ocs`，工具 schema 被注册两遍（白花 token）。
+ * 清理时一律按前缀匹配。
+ */
+const DSH_MARK_START_RE = /^# >>> ocs-mcp .*>>>$/;
 
 /** profile 名只允许安全字符，避免拼接出目录穿越 */
 const PROFILE_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -261,6 +269,8 @@ export interface DshBridgeOptions {
 	apiKey: string;
 	/** 证书指纹，可为空 */
 	certFingerprint?: string;
+	/** 工具集：basic 只注册 8 个常用工具（省 token），full 注册全部 */
+	toolset?: 'basic' | 'full';
 }
 
 /** YAML 单引号字符串：路径里常有空格/中文，单引号不需要转义；值里的单引号双写 */
@@ -270,7 +280,7 @@ function yamlString(value: string): string {
 
 /** 生成要写进 DSH patch 层的受管块 */
 export function renderManagedBlock(opts: DshBridgeOptions): string {
-	return [
+	const lines = [
 		DSH_MARK_START,
 		'- insert:',
 		'    - id: ocs-mcp',
@@ -284,11 +294,14 @@ export function renderManagedBlock(opts: DshBridgeOptions): string {
 		'        env:',
 		`          OCS_BASE: ${yamlString(opts.ocsBase)}`,
 		`          OCS_API_KEY: ${yamlString(opts.apiKey)}`,
-		`          OCS_CERT_SHA256: ${yamlString(opts.certFingerprint || '')}`,
-		'        toolCallTimeoutMs: 30000',
-		'        failOnStartupError: false',
-		DSH_MARK_END
-	].join('\n');
+		`          OCS_CERT_SHA256: ${yamlString(opts.certFingerprint || '')}`
+	];
+	// 精简工具集：只注册 8 个常用工具；工具定义每轮都会随请求发送，省下来的是实打实的 token
+	if (opts.toolset === 'basic') {
+		lines.push(`          OCS_MCP_TOOLSET: 'basic'`);
+	}
+	lines.push('        toolCallTimeoutMs: 30000', '        failOnStartupError: false', DSH_MARK_END);
+	return lines.join('\n');
 }
 
 /**
@@ -302,7 +315,7 @@ export function upsertManagedBlock(existing: string, block: string): string {
 	let inside = false;
 	for (const line of String(existing || '').split(/\r?\n/)) {
 		const trimmed = line.trim();
-		if (trimmed === DSH_MARK_START) {
+		if (DSH_MARK_START_RE.test(trimmed)) {
 			inside = true;
 			continue;
 		}
@@ -460,7 +473,7 @@ export function detectDsh(input?: string): DshStatus {
 	for (const profile of profiles) {
 		try {
 			const patch = fs.readFileSync(path.join(profilesDir, profile, 'cordis.patch.yml'), 'utf8');
-			if (patch.includes(DSH_MARK_START)) {
+			if (patch.split(/\r?\n/).some((line) => DSH_MARK_START_RE.test(line.trim()))) {
 				configured.push(profile);
 			}
 		} catch {
@@ -497,6 +510,8 @@ export interface DshWriteInput {
 	bridgeDir?: string;
 	/** 可选：覆盖 DSH 配置根目录（DSH 跑在别的用户下时用） */
 	dshHome?: string;
+	/** 工具集：basic 只注册 8 个常用工具（省 token） */
+	toolset?: 'basic' | 'full';
 }
 
 export interface DshWriteResult {
@@ -550,7 +565,8 @@ export function writeDshProfile(input: DshWriteInput): DshWriteResult {
 		bridgeDir,
 		ocsBase,
 		apiKey,
-		certFingerprint: input?.certFingerprint
+		certFingerprint: input?.certFingerprint,
+		toolset: input?.toolset
 	});
 
 	let existing: string;

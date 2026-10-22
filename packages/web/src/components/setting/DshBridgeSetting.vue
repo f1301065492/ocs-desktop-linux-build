@@ -187,6 +187,18 @@
 				<div class="hint">自签证书的 SHA-256 指纹，会一起写进配置做固定校验。</div>
 			</Description>
 
+			<Description label="工具集">
+				<a-switch
+					v-model="state.toolsetBasic"
+					size="small"
+				/>
+				<span class="ms-2 text-secondary">精简（basic）</span>
+				<div class="hint">
+					只注册 8 个常用工具（健康检查 / 列表 / 详情 / 启动 / 关闭 / 标签页 / 截图 / 日志）， 省掉任务、脚本增删等
+					schema——工具定义每轮都会随请求发送，开启后每轮少约 1k token。
+				</div>
+			</Description>
+
 			<a-space class="mt-3">
 				<a-button
 					type="primary"
@@ -365,6 +377,7 @@ const state = reactive({
 	notifyRunning: false,
 	notifyPid: 0,
 	notifyLog: [] as string[],
+	toolsetBasic: false,
 	dshHome: '',
 	profile: '',
 	ocsBase: '',
@@ -473,7 +486,8 @@ async function writeConfig() {
 			ocsBase: state.ocsBase.trim(),
 			apiKey: state.apiKey.trim(),
 			certFingerprint: state.status?.remoteApi?.certFingerprint || '',
-			dshHome: state.dshHome.trim()
+			dshHome: state.dshHome.trim(),
+			toolset: state.toolsetBasic ? 'basic' : 'full'
 		});
 		state.result = result;
 		Message.success('已写入 DSH 配置');

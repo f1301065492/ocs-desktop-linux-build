@@ -159,9 +159,10 @@ cp "$PATCH" "$BACKUP"
 info "已备份: $BACKUP"
 
 TMP_FILE="$(mktemp)"
-# 删掉旧的受管块（如果之前跑过），其余内容原样保留
-awk -v s="$MARK_START" -v e="$MARK_END" '
-	$0 == s { skip=1; next }
+# 删掉旧的受管块（如果之前跑过），其余内容原样保留。
+# 起始标记按前缀匹配：设置页写的是 "(managed by OCS Desktop)"，两边各认各的会留下两份 serverName: ocs。
+awk -v e="$MARK_END" '
+	$0 ~ /^# >>> ocs-mcp .*>>>$/ { skip=1; next }
 	$0 == e { skip=0; next }
 	skip != 1 { print }
 ' "$PATCH" >"$TMP_FILE"

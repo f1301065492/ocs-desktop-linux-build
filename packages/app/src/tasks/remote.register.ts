@@ -343,6 +343,7 @@ const methods = {
 		apiKey: string;
 		certFingerprint?: string;
 		dshHome?: string;
+		toolset?: 'basic' | 'full';
 	}) => writeDshProfile(input),
 	/** 跨用户场景：弹系统认证框，给 OCS 用户授权读写 DSH 配置目录（一次性） */
 	dshBridgeGrantAccess: (input?: { dshHome?: string }) => grantDshAccess(input),
