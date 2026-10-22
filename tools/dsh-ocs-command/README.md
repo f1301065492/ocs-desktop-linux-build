@@ -85,6 +85,33 @@ sudo bash /opt/ocs-command/install.sh --base https://127.0.0.1:15320 --key '…'
 - `/ocs 查看` 不会打印账号密码字段，只显示名称、状态、标签、备注、自动化程序。
 - 命令只能做固定动作（查列表/日志/启停/任务/健康）；自然语言操作仍走 agent + MCP（花 token）。
 
+## 在 IM 机器人（飞书）里使用
+
+DSH 的 IM 桥接只识别内置命令（`/new` `/compact` `/status` …），**未知的 `/xxx` 会被当成普通提问发给模型**
+（源码注释：`Unknown slash-prefixed text remains an ordinary prompt`）。所以默认情况下，在飞书里发
+`/ocs 列表` 会走 agent、花 token，而不是走本地命令。
+
+要让它也走本地命令，需要给飞书桥接打一个小补丁：
+
+```bash
+sudo bash tools/dsh-ocs-command/patch-im-bridge.sh --dsh-home /root/.dsh --profile web
+```
+
+脚本会在 `@xmanrui/dsh-im/src/channels/feishu/bridge.mjs` 的消息处理里插入一段拦截：
+
+- 匹配 `^/ocs(\s|$)` → 通过 Harness 的命令网关执行（与网页里相同的 `/ocs` 命令，零 token）；
+- 把命令结果直接回复到当前聊天；
+- 带标记、可重复执行；先备份，`--revert` 可恢复最近一次备份；写完后做 `node --check`。
+
+然后重启 DSH，在飞书私聊里发 `/ocs 帮助`。
+
+注意：
+
+- 这是**对第三方插件源码的补丁**，`@xmanrui/dsh-im` 升级后会被覆盖，重新执行一次脚本即可。
+- 目前只适配了飞书；企微桥接的命令分发结构不同，需要单独适配。
+- 群聊里仍受 DSH 的回复模式（必须 @ 机器人）和访问策略限制。
+- 还没建立会话时发 `/ocs` 会提示先发一条普通消息（命令网关需要绑定会话）。
+
 ## 卸载
 
 ```bash
