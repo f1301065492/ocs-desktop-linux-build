@@ -97,11 +97,13 @@ DSH 的 IM 桥接只识别内置命令（`/new` `/compact` `/status` …），**
 sudo bash tools/dsh-ocs-command/patch-im-bridge.sh --dsh-home /root/.dsh --profile web
 ```
 
-脚本会在 `@xmanrui/dsh-im/src/channels/feishu/bridge.mjs` 的消息处理里插入一段拦截：
+脚本会在插件**实际加载的打包产物** `@xmanrui/dsh-im/lib/index.js` 的飞书命令分支里插入一段拦截
+（注意不是 `src/`——`package.json` 的 `main` 指向 `lib/index.js`，改 `src` 不会生效）：
 
 - 匹配 `^/ocs(\s|$)` → 通过 Harness 的命令网关执行（与网页里相同的 `/ocs` 命令，零 token）；
 - 把命令结果直接回复到当前聊天；
-- 带标记、可重复执行；先备份，`--revert` 可恢复最近一次备份；写完后做 `node --check`。
+- 带标记、可重复执行；先备份（备份名含时间戳，重复执行也不会覆盖），`--revert` 恢复最早那份原始文件；
+- 写完后用 `node --check` 校验，失败自动回滚。
 
 然后重启 DSH，在飞书私聊里发 `/ocs 帮助`。
 
