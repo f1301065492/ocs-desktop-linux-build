@@ -42,10 +42,14 @@ const STATUS_VIEW = {
 	orphaned: ['🟠', '失联']
 };
 
-function statusBadge(status) {
+function statusView(status) {
 	const key = String(status || '').toLowerCase();
-	const view = STATUS_VIEW[key];
-	return view ? `${view[0]} ${view[1]}` : `❔ ${status || '未知'}`;
+	return STATUS_VIEW[key] || ['❔', status || '未知'];
+}
+
+function statusBadge(status) {
+	const [icon, label] = statusView(status);
+	return `${icon} ${label}`;
 }
 
 function bulletList(title, items) {
@@ -259,7 +263,8 @@ export function apply(ctx, config = {}) {
 		const running = list.filter((item) => item.status === 'launched').length;
 		const lines = [`📋 OCS 浏览器 · 共 ${list.length} 台（运行中 ${running}）`, '────────────────'];
 		for (const item of list) {
-			lines.push(`${statusBadge(item.status)}  ${item.name || '(未命名)'}  [${shortUid(item.uid)}]`);
+			const [icon, label] = statusView(item.status);
+			lines.push(`${icon} ${item.name || '(未命名)'}  [${shortUid(item.uid)}] · ${label}`);
 		}
 		return lines.join('\n');
 	}
