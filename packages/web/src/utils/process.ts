@@ -11,6 +11,7 @@ import { child_process } from './node';
 import { notify } from './notify';
 import { Status } from './statusBar';
 import { filterScriptsNeedingInstall } from './script-version';
+import { notifyRealtime } from './dsh-notify';
 
 export type RemoteScriptWorker = <W extends keyof ScriptWorker = keyof ScriptWorker>(
 	event: W,
@@ -160,8 +161,12 @@ export class Process extends EventEmitter {
 	 * 存原始 Buffer 会让两边渲染结果不一致。
 	 */
 	private appendLogs(...parts: unknown[]) {
+		// 与轮询链路保持同样的标签格式，主进程据此去重同一条消息
+		const label = `${this.browser.name || '(未命名)'} [${String(this.browser.uid).slice(0, 8)}]`;
 		for (const part of parts) {
 			this.logs.push(String(part));
+			// 实时通知：新输出立即上报，主进程过滤/去重后投递到 DSH
+			notifyRealtime(label, part);
 		}
 		if (this.logs.length > MAX_LOG_CHUNKS) {
 			this.logs.splice(0, this.logs.length - MAX_LOG_CHUNKS);

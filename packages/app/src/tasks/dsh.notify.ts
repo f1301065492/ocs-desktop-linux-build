@@ -31,11 +31,34 @@ function getLogger(): ReturnType<typeof Logger> {
 }
 
 const MAX_LOG_LINES = 60;
-const MIN_INTERVAL_SEC = 10;
+const MIN_INTERVAL_SEC = 5;
 const MAX_INTERVAL_SEC = 3600;
 const DEFAULT_DELIVERY_URL = 'http://127.0.0.1:3080/api/dsh-im/delivery/messages';
 /** Bot/目标 ID 只允许非空白字符，避免拼进环境变量时出现奇怪内容 */
 const ID_RE = /^\S{1,200}$/;
+
+/**
+ * 实时推送用的关键字（与 ocs-watch 的默认规则保持一致）。
+ * 渲染进程把每条新日志送来，主进程用它过滤，避免把安装日志也推出去。
+ */
+const REALTIME_PATTERNS = [
+	/登录成功/,
+	/登录失败|密码错误|账号或密码/,
+	/需要人工|人工处理|人工输入/,
+	/验证码/,
+	/错误|失败|异常|超时/,
+	/初始化完成|浏览器已启动|已提交登录表单/
+];
+
+/**
+ * 实时推送与轮询共用一份「最近推送过」的记录。
+ *
+ * 两条链路可能在同一秒内看到同一行（实时走渲染进程、轮询走日志接口），
+ * 只有主进程能同时看到两边，所以统一在这里去重。30 秒窗口足够覆盖轮询间隔，
+ * 又不会把「一分钟后又失败一次」这种真实重复吞掉。
+ */
+const DEDUPE_TTL_MS = 30_000;
+const recentPushes = new Map<string, number>();
 
 export interface DshNotifyInput {
 	/** OCS 远程 API 地址，如 https://127.0.0.1:15320 */
@@ -49,6 +72,9 @@ export interface DshNotifyInput {
 	/** 轮询间隔（秒） */
 	intervalSec?: number;
 }
+
+/** 当前生效的通知配置（start 时缓存，实时推送依赖它） */
+let activeConfig: DshNotifyInput | null = null;
 
 export interface DshNotifyStatus {
 	running: boolean;
@@ -83,6 +109,11 @@ function attachLines(stream: Readable | null, prefix = '') {
 		const parts = buffer.split(/\r?\n/);
 		buffer = parts.pop() || '';
 		for (const part of parts) {
+			if (part.startsWith('OCS_NOTIFY ')) {
+				// watcher 的结构化通知：交给统一投递（与实时推送共用去重表）
+				handleWatcherNotify(part.slice('OCS_NOTIFY '.length));
+				continue;
+			}
 			pushLine(prefix + part);
 		}
 	});
@@ -122,10 +153,135 @@ function validate(input: DshNotifyInput): DshNotifyInput {
 	return { ocsBase, apiKey, botId, targetId, deliveryUrl, intervalSec: rawInterval };
 }
 
+export interface DshNotifyEntry {
+	/** 浏览器标签，如「测试 [c026de85]」；状态/连接类消息可为空 */
+	name: string;
+	line: string;
+}
+
+/** 最近窗口内是否已推送过同一条（name + line） */
+function shouldPush(name: string, line: string): boolean {
+	const key = `${name}|${line}`;
+	const now = Date.now();
+	if (recentPushes.has(key)) {
+		return false;
+	}
+	recentPushes.set(key, now);
+	if (recentPushes.size > 500) {
+		for (const [item, ts] of recentPushes) {
+			if (now - ts > DEDUPE_TTL_MS) {
+				recentPushes.delete(item);
+			}
+		}
+	}
+	return true;
+}
+
+async function postDelivery(cfg: DshNotifyInput, text: string): Promise<void> {
+	await axios.post(
+		cfg.deliveryUrl || DEFAULT_DELIVERY_URL,
+		{ botId: cfg.botId, targetId: cfg.targetId, text, format: 'plain' },
+		{ timeout: 8000 }
+	);
+}
+
+/**
+ * 统一投递入口：实时（渲染进程）与轮询（watcher 子进程）都走这里。
+ * 先按 name+line 去重，再按浏览器分组拼成一条消息发出去。
+ */
+async function deliverEntries(entries: DshNotifyEntry[]): Promise<{ pushed: number; message?: string }> {
+	const cfg = activeConfig;
+	if (!cfg || !entries.length) {
+		return { pushed: 0 };
+	}
+	const kept: DshNotifyEntry[] = [];
+	for (const entry of entries) {
+		const name = String(entry?.name || '').slice(0, 120);
+		const line = String(entry?.line || '').trim();
+		if (!line || !shouldPush(name, line)) {
+			continue;
+		}
+		kept.push({ name, line });
+	}
+	if (!kept.length) {
+		return { pushed: 0 };
+	}
+
+	const grouped = new Map<string, string[]>();
+	for (const entry of kept) {
+		if (!grouped.has(entry.name)) {
+			grouped.set(entry.name, []);
+		}
+		grouped.get(entry.name)?.push(entry.line);
+	}
+	const body = [...grouped]
+		.map(([name, items]) => (name ? `${name}\n${items.map((item) => `  · ${item}`).join('\n')}` : items.join('\n')))
+		.join('\n');
+	try {
+		await postDelivery(cfg, `【OCS 提醒】\n${body}`);
+		return { pushed: kept.length };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		pushLine(`推送失败：${message}`);
+		getLogger().warn(`通知投递失败：${message}`);
+		return { pushed: 0, message };
+	}
+}
+
+/**
+ * 渲染进程实时上报（秒级）。
+ * 每行先用关键字过滤，再与轮询链路共用去重表。
+ */
+export async function pushRealtimeNotify(input: {
+	entries?: DshNotifyEntry[];
+	lines?: string[];
+}): Promise<{ pushed: number; message?: string }> {
+	if (!activeConfig) {
+		return { pushed: 0, message: '通知未启用' };
+	}
+	const entries: DshNotifyEntry[] = [];
+	if (Array.isArray(input?.entries)) {
+		for (const item of input.entries) {
+			const line = String(item?.line || '').trim();
+			if (line && REALTIME_PATTERNS.some((re) => re.test(line))) {
+				entries.push({ name: String(item?.name || ''), line });
+			}
+		}
+	}
+	if (Array.isArray(input?.lines)) {
+		for (const raw of input.lines) {
+			const line = String(raw || '').trim();
+			if (line && REALTIME_PATTERNS.some((re) => re.test(line))) {
+				entries.push({ name: '', line });
+			}
+		}
+	}
+	return deliverEntries(entries);
+}
+
+/** 解析 watcher 以 `--deliver parent` 输出的一行 JSON 通知 */
+function handleWatcherNotify(payload: string): void {
+	try {
+		const parsed = JSON.parse(payload);
+		if (!Array.isArray(parsed)) {
+			return;
+		}
+		const entries: DshNotifyEntry[] = parsed
+			.filter((item) => item && typeof item.line === 'string')
+			.map((item) => ({ name: String(item.name || ''), line: String(item.line) }));
+		// 不阻塞子进程输出读取
+		deliverEntries(entries).catch(() => {});
+	} catch {
+		// 格式不对：忽略这一行，不能影响主流程
+	}
+}
+
 /** 拉起常驻的 ocs-watch；重复调用会先停掉旧进程（幂等） */
 export function startDshNotify(input: DshNotifyInput): DshNotifyStatus {
 	const cfg = validate(input);
 	stopDshNotify();
+	// 实时推送依赖这份配置（渲染进程只上报日志行，不接触密钥）
+	activeConfig = cfg;
 
 	const dir = bundledBridgeDir();
 	const script = path.join(dir, 'ocs-watch.mjs');
@@ -150,11 +306,16 @@ export function startDshNotify(input: DshNotifyInput): DshNotifyStatus {
 	startedAt = Date.now();
 	pushLine(`启动通知监听（每 ${cfg.intervalSec}s，${cfg.ocsBase}）`);
 
-	const proc = spawn(process.execPath, [script, '--loop', '--every', String(cfg.intervalSec), '--deliver', 'dsh'], {
-		cwd: dir,
-		env,
-		stdio: ['ignore', 'pipe', 'pipe']
-	});
+	const proc = spawn(
+		process.execPath,
+		// parent 模式：watcher 把结构化通知打到 stdout，由主进程统一去重/投递
+		[script, '--loop', '--every', String(cfg.intervalSec), '--deliver', 'parent'],
+		{
+			cwd: dir,
+			env,
+			stdio: ['ignore', 'pipe', 'pipe']
+		}
+	);
 	child = proc;
 
 	attachLines(proc.stdout);
@@ -188,6 +349,8 @@ export function stopDshNotify(): DshNotifyStatus {
 		}
 		pushLine('已停止通知监听');
 	}
+	// 关闭开关后实时推送也应停止
+	activeConfig = null;
 	return dshNotifyStatus();
 }
 

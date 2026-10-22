@@ -81,10 +81,12 @@ export type WebStore = {
 			/** 点击「新建浏览器」时是否自动打开初始化弹窗并执行初始化 */
 			autoInitNewBrowser: boolean;
 		};
-		/** DSH 主动通知（ocs-watch 常驻进程） */
+		/** DSH 主动通知（ocs-watch 常驻进程 + 实时推送） */
 		dshNotify: {
 			/** 是否随 OCS 启动并常驻 */
 			enabled: boolean;
+			/** 实时推送：脚本事件/错误秒级发给主进程（轮询仍作为兜底） */
+			realtime: boolean;
 			/** 轮询间隔（秒） */
 			intervalSec: number;
 			/** DSH IM 机器人的 Bot ID */
@@ -121,7 +123,8 @@ export type WebStore = {
 /** DSH 主动通知的默认值（旧版本数据里没有这个键，解密后需要补） */
 const DEFAULT_DSH_NOTIFY = {
 	enabled: false,
-	intervalSec: 60,
+	realtime: true,
+	intervalSec: 5,
 	botId: '',
 	targetId: '',
 	deliveryUrl: '',

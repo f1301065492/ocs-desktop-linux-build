@@ -290,6 +290,13 @@ console.log('\n=== ocs-watch（推送）===');
 	const repeated = await runWatch(env, stateFile);
 	checkMatch('重复出现的同一行仍会播报', repeated, /需要人工处理/);
 
+	// --deliver parent：把结构化通知交给父进程（OCS 主进程）统一去重/投递
+	mock.appendLog(UID, '超星：检测到验证码，需要人工处理\n');
+	const parentRun = await runWatchDetailed(env, stateFile, ['--deliver', 'parent']);
+	checkMatch('parent 模式输出结构化通知', parentRun.out, /OCS_NOTIFY /);
+	checkMatch('结构化通知包含行内容', parentRun.out, /需要人工处理/);
+	check('parent 模式不在 stdout 打印人类可读文本', /【OCS 提醒】/.test(parentRun.out), false);
+
 	mock.setStatus(UID, 'closed');
 	const fourth = await runWatch(env, stateFile);
 	checkMatch('状态变化会播报', fourth, /状态：launched → closed/);

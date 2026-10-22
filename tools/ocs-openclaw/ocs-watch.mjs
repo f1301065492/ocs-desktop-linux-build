@@ -115,8 +115,18 @@ function parseArgs(argv) {
  * `dsh` 走 DSH-IM 的主动投递 HTTP 接口：它跑在 DSH 的 Web 服务里，**不经过模型，不花 token**。
  * 失败只打到 stderr、绝不抛——一条通知丢了也不能把看门狗弄死。
  */
-async function deliver(args, text) {
+async function deliver(args, result) {
+	const text = (result && result.text) || '';
+	const entries = (result && result.entries) || [];
 	if (args.deliver === 'none') {
+		return;
+	}
+	if (args.deliver === 'parent') {
+		// 交给父进程（OCS 主进程）统一去重后再投递：
+		// 实时推送和轮询可能看到同一行，只有主进程能同时看到两边
+		if (entries.length) {
+			console.log('OCS_NOTIFY ' + JSON.stringify(entries));
+		}
 		return;
 	}
 	if (args.deliver !== 'dsh') {
@@ -169,10 +179,10 @@ function interesting(line, patterns) {
 
 /**
  * 检查一次。
- * @returns {{ text: string, hasNews: boolean }}
+ * @returns {{ text: string, hasNews: boolean, entries: { name: string, line: string }[] }}
  */
 async function inspect(cfg, args, state, patterns) {
-	const lines = [];
+	const entries = [];
 
 	const data = await OcsApi.browsers(cfg, {});
 	const browsers = (data && data.browsers) || [];
@@ -194,7 +204,7 @@ async function inspect(cfg, args, state, patterns) {
 
 		// 1. 状态变化：第一次见到只记基线，不播报（否则装上就刷一轮）
 		if (record.status && record.status !== browser.status) {
-			lines.push(`${label} 状态：${record.status} → ${browser.status}`);
+			entries.push({ name: label, line: `状态：${record.status} → ${browser.status}` });
 		}
 		record.status = browser.status;
 
@@ -206,7 +216,7 @@ async function inspect(cfg, args, state, patterns) {
 		try {
 			log = await OcsApi.logs(cfg, browser.uid, args.lines);
 		} catch (err) {
-			lines.push(`${label} 读日志失败：${err.message}`);
+			entries.push({ name: label, line: `读日志失败：${err.message}` });
 			continue;
 		}
 		const text = (log && log.text) || '';
@@ -239,12 +249,24 @@ async function inspect(cfg, args, state, patterns) {
 			fresh = fresh.slice(-20);
 		}
 		if (fresh.length) {
-			lines.push(`${label}\n${fresh.map((item) => `  · ${item}`).join('\n')}`);
+			for (const line of fresh) {
+				entries.push({ name: label, line });
+			}
 		}
 	}
 
-	const body = lines.join('\n');
-	return { text: body ? `【OCS 提醒】\n${body}` : '', hasNews: Boolean(body) };
+	// 按浏览器分组拼成可读文本（stdout / 直接投递 DSH 时用）
+	const grouped = new Map();
+	for (const entry of entries) {
+		if (!grouped.has(entry.name)) {
+			grouped.set(entry.name, []);
+		}
+		grouped.get(entry.name).push(entry.line);
+	}
+	const body = [...grouped]
+		.map(([name, items]) => `${name}\n${items.map((item) => `  · ${item}`).join('\n')}`)
+		.join('\n');
+	return { text: body ? `【OCS 提醒】\n${body}` : '', hasNews: Boolean(body), entries };
 }
 
 async function runOnce(cfg, args, patterns) {
@@ -263,18 +285,27 @@ async function runOnce(cfg, args, patterns) {
 		if (state.lastError !== message) {
 			state.lastError = message;
 			saveState(args.state, state);
-			return { text: `【OCS 提醒】\n连不上 OCS（${cfg.base}）：${message}`, hasNews: true };
+			return {
+				text: `【OCS 提醒】\n连不上 OCS（${cfg.base}）：${message}`,
+				hasNews: true,
+				entries: [{ name: '', line: `连不上 OCS（${cfg.base}）：${message}` }]
+			};
 		}
 		saveState(args.state, state);
-		return { text: '', hasNews: false };
+		return { text: '', hasNews: false, entries: [] };
 	}
 
 	if (state.lastError) {
 		// 上一轮是失败、这轮成功了：播报恢复
-		const recovered = `【OCS 提醒】\n已恢复与 OCS（${cfg.base}）的连接`;
+		const recovered = `已恢复与 OCS（${cfg.base}）的连接`;
 		state.lastError = '';
 		saveState(args.state, state);
-		return { text: result.hasNews ? `${recovered}\n${result.text}` : recovered, hasNews: true };
+		const entries = [{ name: '', line: recovered }, ...((result && result.entries) || [])];
+		return {
+			text: result.hasNews ? `【OCS 提醒】\n${recovered}\n${result.text.replace(/^【OCS 提醒】\n?/, '')}` : `【OCS 提醒】\n${recovered}`,
+			hasNews: true,
+			entries
+		};
 	}
 
 	saveState(args.state, state);
@@ -301,7 +332,11 @@ if (args.loop) {
 			const result = await runOnce(cfg, args, patterns);
 			if (result.hasNews) {
 				// stdout 模式带时间戳方便看日志；投递到聊天时用原文（时间平台会显示）
-				await deliver(args, args.deliver === 'stdout' ? `${new Date().toLocaleString()} ${result.text}` : result.text);
+				const payload =
+					args.deliver === 'stdout'
+						? { ...result, text: `${new Date().toLocaleString()} ${result.text}` }
+						: result;
+				await deliver(args, payload);
 			}
 		} catch (err) {
 			console.error(`[ocs-watch] 本轮检查异常：${err && err.message ? err.message : err}`);
@@ -311,7 +346,7 @@ if (args.loop) {
 } else {
 	const result = await runOnce(cfg, args, patterns);
 	if (result.hasNews) {
-		await deliver(args, result.text);
+		await deliver(args, result);
 	} else if (args.deliver === 'stdout') {
 		// OpenClaw 对 HEARTBEAT_OK 会跳过播报，用它表示「这轮没什么可说的」
 		console.log('HEARTBEAT_OK');

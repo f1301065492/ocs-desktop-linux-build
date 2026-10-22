@@ -281,6 +281,18 @@
 				<span class="ms-2 text-secondary">{{ notifyStatusText }}</span>
 			</Description>
 
+			<Description label="实时推送">
+				<a-switch
+					v-model="notify.realtime"
+					size="small"
+				/>
+				<span class="ms-2 text-secondary">脚本事件/错误秒级推送</span>
+				<div class="hint">
+					实时通知走渲染进程的日志事件，立即投递；下面的轮询作为兜底（默认 5
+					秒）。两条链路在主进程统一去重，同一条消息不会推两次。
+				</div>
+			</Description>
+
 			<Description label="Bot ID">
 				<a-input
 					v-model="notify.botId"
@@ -313,9 +325,9 @@
 				<a-input-number
 					v-model="notify.intervalSec"
 					size="small"
-					:min="10"
+					:min="5"
 					:max="3600"
-					:step="10"
+					:step="5"
 					style="width: 160px"
 				/>
 				<span class="ms-2 text-secondary">秒</span>

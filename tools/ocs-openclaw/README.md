@@ -243,7 +243,7 @@ node check-ocs.mjs --uid <某个浏览器uid>
 
 ```bash
 node check-ocs.mjs --uid <uid>   # 对着**真实** OCS 自检（在机器 B 上跑），逐项给结论
-node test/run.mjs                 # 假 OCS + 47 项断言，不碰真机：
+node test/run.mjs                 # 假 OCS + 50 项断言，不碰真机：
                                   # 证书固定/密钥校验/错误码、MCP 握手与工具、推送的基线/去重/掉线提醒
 node test/serve-mock.mjs          # 手动玩：打印可复制的 OCS_BASE/KEY/指纹，每 20 秒追加一行日志
 ```
@@ -251,7 +251,7 @@ node test/serve-mock.mjs          # 手动玩：打印可复制的 OCS_BASE/KEY/
 不碰真机也能验证这几个脚本：
 
 ```bash
-node test/run.mjs         # 起假 OCS（HTTPS+自签证书），跑 47 项断言：
+node test/run.mjs         # 起假 OCS（HTTPS+自签证书），跑 50 项断言：
                           # 证书固定/密钥校验/错误码、MCP 握手与工具、推送的基线/去重/掉线提醒
 node test/serve-mock.mjs  # 手动玩：打印可复制的 OCS_BASE/KEY/指纹，每 20 秒追加一行日志
 ```
@@ -468,9 +468,9 @@ DSH 的 IM 插件（`@xmanrui/dsh-im`）提供**主动投递**接口：外部程
 
 ### 3. 跑起来（二选一）
 
-> **OCS ≥ 2.13.13 可以直接在设置页里启用**：「设置 → AI 助手接入（DSH）→ 主动通知」，
-> 填 Bot ID / 目标 ID、打开开关即可——进程由 OCS 拉起，随 OCS 退出，密钥随设置加密保存，
-> 不需要终端。下面的命令行方式适用于不用 OCS 界面或想独立部署的场景。
+> **OCS ≥ 2.13.17 默认「实时 + 轮询」共存**：设置页开启「实时推送」后，脚本事件/错误在渲染进程里
+> 一出现就推（秒级）；`ocs-watch` 仍按设定间隔（默认 5 秒）轮询兜底。两条链路在主进程统一去重
+> （30 秒窗口），同一条消息只会发一次。下面的命令行方式适用于不用 OCS 界面或想独立部署的场景。
 
 ```bash
 cd /opt/ocs-bridge

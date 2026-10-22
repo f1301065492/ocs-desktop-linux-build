@@ -29,7 +29,7 @@ import {
 } from './remote.api/config';
 import { regenerateTlsMaterial } from './remote.api/tls';
 import { detectDsh, detectDshConnection, grantDshAccess, writeDshProfile } from './dsh.bridge';
-import { dshNotifyStatus, startDshNotify, stopDshNotify, testDshNotify } from './dsh.notify';
+import { dshNotifyStatus, pushRealtimeNotify, startDshNotify, stopDshNotify, testDshNotify } from './dsh.notify';
 import type { DshNotifyInput } from './dsh.notify';
 import {
 	confirmHostKey,
@@ -369,6 +369,8 @@ const methods = {
 	dshNotifyStart: (input: DshNotifyInput) => startDshNotify(input),
 	dshNotifyStop: () => stopDshNotify(),
 	dshNotifyTest: (input: DshNotifyInput) => testDshNotify(input),
+	/** 渲染进程实时上报（秒级），主进程负责过滤、去重与投递 */
+	dshNotifyPush: (input: { entries?: { name: string; line: string }[]; lines?: string[] }) => pushRealtimeNotify(input),
 
 	// ── SSH 反向隧道 ──
 
