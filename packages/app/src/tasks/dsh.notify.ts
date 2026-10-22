@@ -94,7 +94,10 @@ function pushLine(line: string) {
 	if (!text) {
 		return;
 	}
-	const stamped = `${new Date().toISOString().slice(11, 19)} ${text}`;
+	const now = new Date();
+	const pad = (value: number) => String(value).padStart(2, '0');
+	// 用本地时区显示（toISOString 是 UTC，会比东八区慢 8 小时）
+	const stamped = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())} ${text}`;
 	logLines.push(stamped);
 	if (logLines.length > MAX_LOG_LINES) {
 		logLines = logLines.slice(-MAX_LOG_LINES);
