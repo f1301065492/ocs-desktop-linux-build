@@ -1,0 +1,11 @@
+{
+	"name": "ocs-command",
+	"version": "1.0.0",
+	"description": "DSH 斜杠命令 /ocs：本地调用 OCS 远程 API，不经过模型、零 token",
+	"type": "module",
+	"main": "index.js",
+	"exports": {
+		".": "./index.js"
+	},
+	"license": "MIT"
+}
