@@ -142,6 +142,8 @@
 
 		<RemoteApiSetting />
 
+		<UpdateSourceSetting />
+
 		<DshBridgeSetting />
 
 		<SshTunnelSetting />
@@ -187,6 +189,7 @@ import { lang, store } from '../store';
 import { remote } from '../utils/remote';
 import BrowserPath from './setting/BrowserPath.vue';
 import RemoteApiSetting from './setting/RemoteApiSetting.vue';
+import UpdateSourceSetting from './setting/UpdateSourceSetting.vue';
 import DshBridgeSetting from './setting/DshBridgeSetting.vue';
 import SshTunnelSetting from './setting/SshTunnelSetting.vue';
 import OCSConfigs from './OCSConfigs.vue';

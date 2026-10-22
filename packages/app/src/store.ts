@@ -76,6 +76,16 @@ export const OriginalAppStore = {
 		uids: [] as string[]
 	},
 	/**
+	 * 软件更新源。
+	 *
+	 * github = 官方 Releases（默认）；mirror = 自建镜像，读取 `<mirrorBase>/latest.json`。
+	 * 属于主进程配置（受 MAIN_PROCESS_OWNED_KEYS 保护），渲染进程通过 IPC 读写。
+	 */
+	update: {
+		source: 'github' as 'github' | 'mirror',
+		mirrorBase: ''
+	},
+	/**
 	 * SSH 反向隧道配置。
 	 *
 	 * 用途：OCS 跑在没有公网 IP 的内网，而调用方在公网 VPS 上。

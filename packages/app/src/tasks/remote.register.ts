@@ -13,6 +13,7 @@ import { store } from '../store';
 import { exportExcel } from '../utils/index';
 import { readdir, stat } from 'fs/promises';
 import { updateApp } from './updater';
+import { getUpdateSourceConfig, setUpdateSourceConfig } from './update.source';
 import { AutomationScripts } from '../scripts';
 import { AutomationScript } from '../scripts/script';
 import { getBrowserMajorVersion, getExtensionPaths } from '../utils/browser';
@@ -194,7 +195,7 @@ function sanitizeSshTunnelPatch(patch: any): Record<string, unknown> {
  * 渲染进程在启动时读到的是快照，并在每次保存时把整个 store 回传，
  * 所以这些键必须在 saveStore 里被保护，否则运行期由主进程写入的值会被快照覆盖。
  */
-const MAIN_PROCESS_OWNED_KEYS = ['remoteApi', 'remoteApiRunning', 'sshTunnel'] as const;
+const MAIN_PROCESS_OWNED_KEYS = ['remoteApi', 'remoteApiRunning', 'sshTunnel', 'update'] as const;
 
 /** 白名单式地构造远程 API 配置补丁，绝不让渲染进程直接写 keyHash / keySalt 等字段 */
 function sanitizeRemoteApiPatch(patch: any): Record<string, unknown> {
@@ -253,6 +254,9 @@ const methods = {
 	statisticFolderSize: statisticFolderSize,
 	getPlatform: () => process.platform,
 	updateApp: updateApp,
+	/** 更新源配置：github / mirror */
+	updateSourceGet: () => getUpdateSourceConfig(),
+	updateSourceSet: (input: { source?: 'github' | 'mirror'; mirrorBase?: string }) => setUpdateSourceConfig(input),
 	moveWindowToTop: moveWindowToTop,
 	isEncryptionAvailable: () => {
 		return safeStorage.isEncryptionAvailable();

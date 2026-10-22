@@ -3,6 +3,9 @@ import axios from 'axios';
 import { gt } from 'semver';
 import { UpdateInformationResource } from '@ocs-desktop/common';
 import { Logger } from '../logger';
+import { store } from '../store';
+import { releaseFromManifest } from './update.manifest';
+import type { MirrorAssetManifest, NormalizedRelease, ReleaseAsset } from './update.manifest';
 
 const logger = Logger('updater');
 
@@ -20,21 +23,35 @@ const RELEASE_REPO = 'f1301065492/ocs-desktop-linux-build';
 const LATEST_RELEASE_API = `https://api.github.com/repos/${RELEASE_REPO}/releases/latest`;
 const REQUEST_TIMEOUT = 10000;
 
-interface GithubAsset {
-	name: string;
-	browser_download_url: string;
-	size: number;
+/** 更新源配置（主进程持久化，渲染进程通过 IPC 读写） */
+export interface UpdateSourceConfig {
+	/** github = 官方 Releases；mirror = 自建镜像 */
+	source: 'github' | 'mirror';
+	/** 镜像根地址，如 https://dl.example.com/ocs；读取 `<base>/latest.json` */
+	mirrorBase: string;
 }
 
-interface GithubRelease {
-	tag_name: string;
-	name: string;
-	body: string;
-	html_url: string;
-	assets: GithubAsset[];
-	draft: boolean;
-	prerelease: boolean;
+export function getUpdateSourceConfig(): UpdateSourceConfig {
+	const raw = (store.store as { update?: Partial<UpdateSourceConfig> }).update || {};
+	return {
+		source: raw.source === 'mirror' ? 'mirror' : 'github',
+		mirrorBase: typeof raw.mirrorBase === 'string' ? raw.mirrorBase.trim() : ''
+	};
 }
+
+export function setUpdateSourceConfig(patch: Partial<UpdateSourceConfig>): UpdateSourceConfig {
+	const next = { ...getUpdateSourceConfig(), ...patch };
+	next.source = next.source === 'mirror' ? 'mirror' : 'github';
+	next.mirrorBase = String(next.mirrorBase || '').trim();
+	if (next.source === 'mirror' && !/^https?:\/\//i.test(next.mirrorBase)) {
+		throw new Error('镜像地址必须以 http(s):// 开头');
+	}
+	store.set('update', next);
+	return next;
+}
+
+type GithubAsset = ReleaseAsset;
+type GithubRelease = NormalizedRelease;
 
 /** 本地该用哪种方式更新 */
 export type UpdateStrategy =
@@ -115,6 +132,34 @@ function toDescription(body: string): UpdateInformationResource['description'] {
 	return { feat: [], fix: [], other: lines };
 }
 
+async function fetchGithubRelease(): Promise<GithubRelease | null> {
+	try {
+		const { data } = await axios.get<GithubRelease>(LATEST_RELEASE_API, {
+			timeout: REQUEST_TIMEOUT,
+			headers: { Accept: 'application/vnd.github+json' }
+		});
+		return data;
+	} catch (err) {
+		logger.info(`检查更新失败（忽略）: ${err instanceof Error ? err.message : String(err)}`);
+		return null;
+	}
+}
+
+async function fetchMirrorRelease(mirrorBase: string): Promise<GithubRelease | null> {
+	const url = mirrorBase.replace(/\/+$/, '') + '/latest.json';
+	try {
+		const { data } = await axios.get<MirrorAssetManifest>(url, { timeout: REQUEST_TIMEOUT });
+		const release = releaseFromManifest(data, mirrorBase);
+		if (!release) {
+			logger.warn(`镜像清单无效（缺 tag 或没有可用资源）：${url}`);
+		}
+		return release;
+	} catch (err) {
+		logger.info(`镜像更新源不可用：${err instanceof Error ? err.message : String(err)}`);
+		return null;
+	}
+}
+
 /**
  * 检查是否有新版本。
  *
@@ -122,16 +167,17 @@ function toDescription(body: string): UpdateInformationResource['description'] {
  * 只记日志。检查更新失败不该打扰使用者，更不该让启动流程出问题。
  */
 export async function checkForUpdate(): Promise<UpdateCheckResult | null> {
-	let release: GithubRelease;
-	try {
-		const { data } = await axios.get<GithubRelease>(LATEST_RELEASE_API, {
-			timeout: REQUEST_TIMEOUT,
-			headers: { Accept: 'application/vnd.github+json' }
-		});
-		release = data;
-	} catch (err) {
-		logger.info(`检查更新失败（忽略）: ${err instanceof Error ? err.message : String(err)}`);
-		return null;
+	const config = getUpdateSourceConfig();
+
+	let release: GithubRelease | null = null;
+	if (config.source === 'mirror' && config.mirrorBase) {
+		release = await fetchMirrorRelease(config.mirrorBase);
+		if (!release) {
+			logger.info('镜像更新源不可用，回退 GitHub Releases');
+		}
+	}
+	if (!release) {
+		release = await fetchGithubRelease();
 	}
 
 	if (!release || release.draft || !release.tag_name) {
