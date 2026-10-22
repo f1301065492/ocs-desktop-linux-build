@@ -303,7 +303,10 @@
 				</a-button>
 			</a-space>
 
-			<div class="hint mt-2">配置随软件设置保存（密钥加密存储）；下次启动 OCS 时自动运行，关闭上面的开关即停止。</div>
+			<div class="hint mt-2">
+				配置随软件设置保存（密钥加密存储）；下次启动 OCS 时自动运行，关闭上面的开关即停止。 修改 Bot ID / 目标 ID /
+				间隔后，需要关闭再打开开关才会生效。
+			</div>
 
 			<a-alert
 				v-if="state.notifyLog.length"
