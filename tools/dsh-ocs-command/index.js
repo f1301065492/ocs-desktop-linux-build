@@ -364,4 +364,6 @@ export function apply(ctx, config = {}) {
 			}),
 		'ocs-command'
 	);
+	// 启动日志：确认插件真的被 DSH 加载（排障用）
+	console.log('[ocs-command] /ocs 命令已注册（本地执行，零 token）');
 }
