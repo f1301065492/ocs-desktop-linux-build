@@ -22,6 +22,8 @@ import { attachRendererWindow, getRemoteApiStatus, restartRemoteApi } from './re
 import { clearApiKey, generateApiKey, setApiKey, updateRemoteApiConfig } from './remote.api/config';
 import { regenerateTlsMaterial } from './remote.api/tls';
 import { detectDsh, grantDshAccess, writeDshProfile } from './dsh.bridge';
+import { dshNotifyStatus, startDshNotify, stopDshNotify, testDshNotify } from './dsh.notify';
+import type { DshNotifyInput } from './dsh.notify';
 import {
 	confirmHostKey,
 	ensureKeyHealthy,
@@ -344,6 +346,12 @@ const methods = {
 	}) => writeDshProfile(input),
 	/** 跨用户场景：弹系统认证框，给 OCS 用户授权读写 DSH 配置目录（一次性） */
 	dshBridgeGrantAccess: (input?: { dshHome?: string }) => grantDshAccess(input),
+
+	// ── 主动通知（OCS → DSH，零 token） ──
+	dshNotifyStatus: () => dshNotifyStatus(),
+	dshNotifyStart: (input: DshNotifyInput) => startDshNotify(input),
+	dshNotifyStop: () => stopDshNotify(),
+	dshNotifyTest: (input: DshNotifyInput) => testDshNotify(input),
 
 	// ── SSH 反向隧道 ──
 

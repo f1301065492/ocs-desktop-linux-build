@@ -81,6 +81,28 @@ import Setup from './components/Setup.vue';
 
 const { ipcRenderer } = electron;
 
+/** 主动通知：配置存在且启用时，随应用启动拉起 watcher（失败只记日志，不打扰用户） */
+async function startDshNotifyIfEnabled() {
+	const cfg = store.render.setting.dshNotify;
+	if (!cfg?.enabled || !cfg.botId || !cfg.targetId || !cfg.apiKey) {
+		return;
+	}
+	try {
+		const status = await remote.methods.call('dshBridgeStatus');
+		const port = status?.remoteApi?.port || 15320;
+		await remote.methods.call('dshNotifyStart', {
+			ocsBase: `https://127.0.0.1:${port}`,
+			apiKey: cfg.apiKey,
+			botId: cfg.botId,
+			targetId: cfg.targetId,
+			deliveryUrl: cfg.deliveryUrl || undefined,
+			intervalSec: cfg.intervalSec
+		});
+	} catch (err) {
+		remote.logger.call('warn', 'DSH 通知自动启动失败：' + String(err)).catch(() => {});
+	}
+}
+
 onMounted(async () => {
 	/** 开启 Ipc 通道监听 */
 	activeIpcRenderListener();
@@ -106,6 +128,9 @@ onMounted(async () => {
 	setAutoLaunch();
 	setAlwaysOnTop();
 	changeTheme().catch(console.error);
+
+	/** 若在设置里开启了主动通知（DSH），随应用启动拉起 ocs-watch */
+	startDshNotifyIfEnabled();
 
 	/** 打开关于软件 */
 	if (store.render.state.first) {

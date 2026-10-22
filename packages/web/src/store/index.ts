@@ -81,6 +81,21 @@ export type WebStore = {
 			/** 点击「新建浏览器」时是否自动打开初始化弹窗并执行初始化 */
 			autoInitNewBrowser: boolean;
 		};
+		/** DSH 主动通知（ocs-watch 常驻进程） */
+		dshNotify: {
+			/** 是否随 OCS 启动并常驻 */
+			enabled: boolean;
+			/** 轮询间隔（秒） */
+			intervalSec: number;
+			/** DSH IM 机器人的 Bot ID */
+			botId: string;
+			/** DSH 投递目标 ID */
+			targetId: string;
+			/** 投递接口地址（留空用 http://127.0.0.1:3080/...） */
+			deliveryUrl: string;
+			/** OCS 远程 API 密钥（随 renderer store 加密保存，供下次启动时自动运行） */
+			apiKey: string;
+		};
 	};
 
 	langs: Record<string, string>;
@@ -101,6 +116,16 @@ export type WebStore = {
 			automation_script_usage: boolean;
 		};
 	};
+};
+
+/** DSH 主动通知的默认值（旧版本数据里没有这个键，解密后需要补） */
+const DEFAULT_DSH_NOTIFY = {
+	enabled: false,
+	intervalSec: 60,
+	botId: '',
+	targetId: '',
+	deliveryUrl: '',
+	apiKey: ''
 };
 
 const _store: AppStore & { render: WebStore } = defaultsDeep(remote['electron-store'].get('store'), {
@@ -159,6 +184,9 @@ const _store: AppStore & { render: WebStore } = defaultsDeep(remote['electron-st
 				// 默认关：开着会让每次启动都重走一遍登录，得配了登录类自动化程序才划算
 				clearLoginOnLaunch: false,
 				autoInitNewBrowser: true
+			},
+			dshNotify: {
+				...DEFAULT_DSH_NOTIFY
 			}
 		},
 		langs: {},
@@ -186,6 +214,10 @@ if (typeof _store.render === 'string') {
 		// @ts-ignore
 		const renderStr = _store.render as string;
 		const data = JSON.parse(remote.methods.callSync('decryptRenderString' as any, renderStr));
+		// 旧数据里没有新增设置项（如 dshNotify）：用默认值补齐，避免设置页读到 undefined
+		if (data && data.setting) {
+			data.setting.dshNotify = { ...DEFAULT_DSH_NOTIFY, ...(data.setting.dshNotify || {}) };
+		}
 		Reflect.set(_store, 'render', data);
 	} catch (e) {
 		console.error('数据解密失败：' + e);
