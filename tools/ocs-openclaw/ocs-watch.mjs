@@ -45,6 +45,27 @@ const DEFAULT_PATTERNS = [
 /** 每个浏览器保留多少行日志尾部，用于下一轮做增量比较 */
 const TAIL_LIMIT = 120;
 
+/** 状态机 → 中文（推送里不再出现 launched/closed 这类英文） */
+const STATUS_TEXT = {
+	launched: '运行中',
+	launching: '启动中',
+	closed: '已关闭',
+	closing: '关闭中',
+	orphaned: '失联'
+};
+
+function statusText(status) {
+	const key = String(status || '').toLowerCase();
+	return STATUS_TEXT[key] || status || '未知';
+}
+
+/** 去掉终端颜色控制符，避免推送里出现 \u001b[100m 之类的乱码 */
+const ANSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+
+function stripAnsi(text) {
+	return String(text || '').replace(ANSI_RE, '');
+}
+
 function parseArgs(argv) {
 	const args = {
 		once: true,
@@ -226,7 +247,10 @@ async function inspect(cfg, args, state, patterns) {
 
 		// 1. 状态变化：第一次见到只记基线，不播报（否则装上就刷一轮）
 		if (record.status && record.status !== browser.status) {
-			entries.push({ name: label, line: `状态：${record.status} → ${browser.status}` });
+			entries.push({
+				name: label,
+				line: `状态：${statusText(record.status)} → ${statusText(browser.status)}`
+			});
 		}
 		record.status = browser.status;
 
@@ -247,7 +271,7 @@ async function inspect(cfg, args, state, patterns) {
 		}
 		const currTail = text
 			.split('\n')
-			.map((line) => line.trim())
+			.map((line) => stripAnsi(line).trim())
 			.filter(Boolean)
 			.slice(-TAIL_LIMIT);
 		const prevTail = Array.isArray(record.tail) ? record.tail : [];
@@ -326,7 +350,9 @@ async function runOnce(cfg, args, patterns) {
 		saveState(args.state, state);
 		const entries = [{ name: '', line: recovered }, ...((result && result.entries) || [])];
 		return {
-			text: result.hasNews ? `【OCS 提醒】\n${recovered}\n${result.text.replace(/^【OCS 提醒】\n?/, '')}` : `【OCS 提醒】\n${recovered}`,
+			text: result.hasNews
+				? `【OCS 提醒】\n${recovered}\n${result.text.replace(/^【OCS 提醒】\n?/, '')}`
+				: `【OCS 提醒】\n${recovered}`,
 			hasNews: true,
 			entries
 		};
@@ -357,9 +383,7 @@ if (args.loop) {
 			if (result.hasNews) {
 				// stdout 模式带时间戳方便看日志；投递到聊天时用原文（时间平台会显示）
 				const payload =
-					args.deliver === 'stdout'
-						? { ...result, text: `${new Date().toLocaleString()} ${result.text}` }
-						: result;
+					args.deliver === 'stdout' ? { ...result, text: `${new Date().toLocaleString()} ${result.text}` } : result;
 				await deliver(args, payload);
 			}
 		} catch (err) {

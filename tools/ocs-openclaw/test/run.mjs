@@ -290,6 +290,12 @@ console.log('\n=== ocs-watch（推送）===');
 	const repeated = await runWatch(env, stateFile);
 	checkMatch('重复出现的同一行仍会播报', repeated, /需要人工处理/);
 
+	// 日志里的终端颜色控制符要清理掉，推送里不该出现 \u001b[31m 这类内容
+	mock.appendLog(UID, '\u001b[31m超星：错误：红色日志\u001b[0m\n');
+	const ansiRun = await runWatch(env, stateFile);
+	checkMatch('日志里的 ANSI 转义会被清理', ansiRun, /错误：红色日志/);
+	check('输出不含 ANSI 转义', /\u001b\[/.test(ansiRun), false);
+
 	// --deliver parent：把结构化通知交给父进程（OCS 主进程）统一去重/投递
 	mock.appendLog(UID, '超星：检测到验证码，需要人工处理\n');
 	const parentRun = await runWatchDetailed(env, stateFile, ['--deliver', 'parent']);
@@ -310,7 +316,7 @@ console.log('\n=== ocs-watch（推送）===');
 
 	mock.setStatus(UID, 'closed');
 	const fourth = await runWatch(env, stateFile);
-	checkMatch('状态变化会播报', fourth, /状态：launched → closed/);
+	checkMatch('状态变化会播报（状态转中文）', fourth, /状态：运行中 → 已关闭/);
 	const fifth = await runWatch(env, stateFile);
 	check('状态变化也做了去重', fifth, 'HEARTBEAT_OK');
 

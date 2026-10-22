@@ -191,6 +191,61 @@ async function postDelivery(cfg: DshNotifyInput, text: string): Promise<void> {
 	);
 }
 
+/** 状态机 → 中文（兼容旧 watcher 传来的英文状态） */
+const STATUS_CN: Record<string, string> = {
+	launched: '运行中',
+	launching: '启动中',
+	closed: '已关闭',
+	closing: '关闭中',
+	orphaned: '失联'
+};
+
+/** 终端颜色控制符（用 fromCharCode 构造，避免 ESLint 的 no-control-regex） */
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
+
+/** 清理一行：去 ANSI、状态转中文、trim */
+function cleanNotifyLine(line: string): string {
+	const text = String(line || '')
+		.replace(ANSI_PATTERN, '')
+		.trim();
+	const status = /^状态：([A-Za-z_-]+)\s*→\s*([A-Za-z_-]+)$/.exec(text);
+	if (status) {
+		const from = STATUS_CN[status[1].toLowerCase()] || status[1];
+		const to = STATUS_CN[status[2].toLowerCase()] || status[2];
+		return `状态：${from} → ${to}`;
+	}
+	return text;
+}
+
+/** 按内容挑一个图标，让推送更好扫读 */
+function lineIcon(line: string): string {
+	if (line.startsWith('状态：')) {
+		return '🔄';
+	}
+	if (/验证码|需要人工|人工处理|人工输入/.test(line)) {
+		return '⚠️';
+	}
+	if (/连不上|不可达/.test(line)) {
+		return '❌';
+	}
+	if (/错误|失败|异常|超时/.test(line)) {
+		return '❌';
+	}
+	if (/已恢复/.test(line)) {
+		return '✅';
+	}
+	if (/登录成功|成功/.test(line)) {
+		return '✅';
+	}
+	if (/已打开|已启动|浏览器已启动|初始化完成/.test(line)) {
+		return '🚀';
+	}
+	if (/关闭|停止/.test(line)) {
+		return '🛑';
+	}
+	return '·';
+}
+
 /**
  * 统一投递入口：实时（渲染进程）与轮询（watcher 子进程）都走这里。
  * 先按 name+line 去重，再按浏览器分组拼成一条消息发出去。
@@ -203,7 +258,7 @@ async function deliverEntries(entries: DshNotifyEntry[]): Promise<{ pushed: numb
 	const kept: DshNotifyEntry[] = [];
 	for (const entry of entries) {
 		const name = String(entry?.name || '').slice(0, 120);
-		const line = String(entry?.line || '').trim();
+		const line = cleanNotifyLine(String(entry?.line || ''));
 		if (!line || !shouldPush(name, line)) {
 			continue;
 		}
@@ -221,10 +276,13 @@ async function deliverEntries(entries: DshNotifyEntry[]): Promise<{ pushed: numb
 		grouped.get(entry.name)?.push(entry.line);
 	}
 	const body = [...grouped]
-		.map(([name, items]) => (name ? `${name}\n${items.map((item) => `  · ${item}`).join('\n')}` : items.join('\n')))
+		.map(([name, items]) => {
+			const rendered = items.map((item) => `  ${lineIcon(item)} ${item}`).join('\n');
+			return name ? `▌ ${name}\n${rendered}` : rendered.trim();
+		})
 		.join('\n');
 	try {
-		await postDelivery(cfg, `【OCS 提醒】\n${body}`);
+		await postDelivery(cfg, `🔔 OCS 提醒\n────────────────\n${body}`);
 		return { pushed: kept.length };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
