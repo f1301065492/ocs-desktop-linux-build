@@ -31,21 +31,54 @@
 				v-if="state.status?.reason === 'unreadable'"
 				class="hint"
 			>
-				跨用户读写不了。用 root 在终端执行：
-				<div class="break mt-1">
-					<code>{{ rootCommand }}</code>
+				<div class="mt-1">DSH 和 OCS 不是同一个用户，有两种做法（任选其一）：</div>
+				<div class="mt-1">
 					<a-button
+						type="primary"
 						size="mini"
-						class="ms-2"
-						@click="copyRootCommand"
+						:loading="state.granting"
+						@click="grantAccess"
 					>
-						复制
+						授权 OCS 访问（弹窗输入管理员密码）
 					</a-button>
+					<span class="ms-2">一次性授权后，这里就能像同用户一样选 profile、直接写入。</span>
 				</div>
 				<div class="mt-1">
-					或者把 DSH 改成和 OCS 同一个用户运行（用哪个用户跑 DSH，配置就写在它的 ~/.dsh 下）。
-					写完重启 DSH，以聊天里是否出现 <code>mcp__ocs__*</code> 为准；OCS 读不到那份文件，卡片上不会显示"已配置"。
+					或者不改权限，直接用 root 一次性写入：
+					<div class="break">
+						<code>{{ rootCommand }}</code>
+						<a-button
+							size="mini"
+							class="ms-2"
+							@click="copyRootCommand"
+						>
+							复制
+						</a-button>
+					</div>
 				</div>
+				<a-alert
+					v-if="state.grantCommand"
+					type="warning"
+					class="mt-2"
+				>
+					<template #title>未能自动授权，可复制下面这条命令到终端执行</template>
+					<div class="break">
+						<code>{{ state.grantCommand }}</code>
+						<a-button
+							size="mini"
+							class="ms-2"
+							@click="copyGrantCommand"
+						>
+							复制
+						</a-button>
+					</div>
+				</a-alert>
+				<div class="mt-1">
+					撤销授权：<code>sudo setfacl -R -x u:{{ state.status.ocsUser }} "{{ state.status.home }}/profiles"</code>
+					（祖先目录上的 <code>x</code> 权限可用
+					<code>sudo setfacl -x u:{{ state.status.ocsUser }} "{{ state.status.home }}"</code> 去掉）
+				</div>
+				<div class="mt-1">授权后请注意：OCS 用户（{{ state.status.ocsUser }}）将能读写 DSH 的 profiles 配置目录。</div>
 			</div>
 			<div
 				v-else
@@ -222,6 +255,8 @@ const state = reactive({
 	status: null as DshBridgeStatus | null,
 	loading: false,
 	saving: false,
+	granting: false,
+	grantCommand: '',
 	dshHome: '',
 	profile: '',
 	ocsBase: '',
@@ -345,6 +380,38 @@ async function copyWatchCommand() {
 async function copyRootCommand() {
 	try {
 		await navigator.clipboard.writeText(rootCommand.value);
+		Message.success('已复制');
+	} catch {
+		Message.warning('复制失败，请手动选中复制');
+	}
+}
+
+/** 跨用户授权：主进程用 pkexec 执行 setfacl，成功后会重新检测 */
+async function grantAccess() {
+	state.granting = true;
+	state.grantCommand = '';
+	try {
+		const result: { ok: boolean; command?: string; message?: string } = await remote.methods.call(
+			'dshBridgeGrantAccess',
+			{ dshHome: state.dshHome.trim() || undefined }
+		);
+		if (result?.ok) {
+			Message.success('已授权，正在重新检测');
+			await loadStatus();
+		} else {
+			state.grantCommand = result?.command || '';
+			Message.error(result?.message || '授权失败');
+		}
+	} catch (err) {
+		Message.error('授权失败：' + String(err));
+	} finally {
+		state.granting = false;
+	}
+}
+
+async function copyGrantCommand() {
+	try {
+		await navigator.clipboard.writeText(state.grantCommand);
 		Message.success('已复制');
 	} catch {
 		Message.warning('复制失败，请手动选中复制');

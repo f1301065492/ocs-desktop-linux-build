@@ -1,7 +1,11 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { app } from 'electron';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * DSH（DeepSeek Harness）接入：把 OCS 的 MCP 桥接写进 DSH 的配置。
@@ -561,14 +565,119 @@ export function writeDshProfile(input: DshWriteInput): DshWriteResult {
 	const backup = `${file}.bak-${stamp}`;
 	try {
 		fs.copyFileSync(file, backup);
-		// 里面有密钥：写的时候就把权限收到 600（Windows 上基本是空操作）
+		// 里面有密钥：写的时候就把权限收到 600
 		fs.writeFileSync(file, next, { encoding: 'utf8', mode: 0o600 });
-		fs.chmodSync(file, 0o600);
 	} catch (err) {
 		throw new Error(permissionHint(err, file));
 	}
+	// 跨用户授权（ACL）场景下，写是允许的，但 chmod 只有属主能做——失败不应让整次写入报错
+	try {
+		fs.chmodSync(file, 0o600);
+	} catch {
+		// 不是属主：保持原权限即可（文件本来就只对属主/root/被授权者开放）
+	}
 
 	return { file, backup };
+}
+
+/** 生成给用户手工执行的单行命令（整段脚本单引号包裹） */
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** 用户名只允许安全字符，避免拼进 shell 脚本 */
+const GRANT_USER_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,31}$/;
+
+/**
+ * 构造给 DSH 数据目录授权用的 POSIX ACL 脚本。
+ *
+ * 目标：让**运行 OCS 的用户**能读/写 `<home>/profiles` 下的配置，从而在设置页直接
+ * 读写 DSH 的 `cordis.patch.yml`，即使 DSH 是另一个用户（典型是 root）跑的。
+ *
+ * - 祖先目录只加 `x`（可穿透，不能列目录），不改属主/权限位；
+ * - profiles 及其子项加 `rwX`（目录可进入、文件可读写）；
+ * - 目录加默认 ACL，DSH 之后新建的 profile/备份也自动继承（仅对 OCS 用户）。
+ *
+ * 这是**一次性**授权：执行后无需 sudo 就能反复改配置。撤销用
+ * `setfacl -R -x u:<user> <home>/profiles`（以及祖先目录上的 `-x u:<user>`）。
+ */
+export function buildAclScript(home: string, user: string): string {
+	if (!path.isAbsolute(home) || /[\0\n\r]/.test(home)) {
+		throw new Error('DSH 目录必须是绝对路径，且不能包含换行');
+	}
+	if (!GRANT_USER_RE.test(user)) {
+		throw new Error(`用户名不合法：${user}`);
+	}
+	const quote = shellQuote;
+	const ancestors: string[] = [];
+	let dir = path.dirname(home);
+	while (dir && dir !== '/' && dir !== path.dirname(dir)) {
+		ancestors.unshift(dir);
+		dir = path.dirname(dir);
+	}
+	const profiles = path.join(home, 'profiles');
+	const lines = ['set -e'];
+	for (const ancestor of ancestors) {
+		lines.push(`/usr/bin/setfacl -m u:${user}:x ${quote(ancestor)}`);
+	}
+	lines.push(`/usr/bin/setfacl -m u:${user}:x ${quote(home)}`);
+	lines.push(`/usr/bin/setfacl -m u:${user}:rx ${quote(profiles)}`);
+	lines.push(`/usr/bin/setfacl -R -m u:${user}:rwX ${quote(profiles)}`);
+	lines.push(`/usr/bin/find ${quote(profiles)} -type d -exec /usr/bin/setfacl -d -m u:${user}:rwX {} +`);
+	return lines.join('\n');
+}
+
+export interface DshGrantInput {
+	/** 可选：用户在界面上指定的 DSH 数据目录 */
+	dshHome?: string;
+}
+
+export interface DshGrantResult {
+	ok: boolean;
+	/** 授权成功后重新检测到的状态 */
+	status?: DshStatus;
+	/** 自动授权失败时，给用户复制到手执行的一条命令 */
+	command?: string;
+	message?: string;
+}
+
+/**
+ * 让当前 OCS 用户获得 DSH 数据目录的读写权限（跨用户场景）。
+ *
+ * 通过 `pkexec` 弹系统认证框执行 setfacl（polkit 授权），只做 ACL，不改文件属主。
+ * 无图形会话 / 没有 polkit 认证代理时会失败，此时返回可复制的 sudo 命令。
+ * 仅 Linux：Windows/macOS 不存在这种跨用户目录权限模型。
+ */
+export async function grantDshAccess(input?: DshGrantInput): Promise<DshGrantResult> {
+	if (process.platform !== 'linux') {
+		return { ok: false, message: '该功能仅支持 Linux（依赖 POSIX ACL 与 polkit）' };
+	}
+	const home = resolveDshHome(input?.dshHome);
+	if (!path.isAbsolute(home) || !fs.existsSync(path.join(home, 'profiles'))) {
+		return { ok: false, message: `找不到 DSH 数据目录：${home}` };
+	}
+	const user = currentUser();
+	let script: string;
+	try {
+		script = buildAclScript(home, user);
+	} catch (err) {
+		return { ok: false, message: err instanceof Error ? err.message : String(err) };
+	}
+	const manual = `sudo /bin/sh -c ${shellQuote(script)}`;
+
+	try {
+		await execFileAsync('/usr/bin/pkexec', ['/bin/sh', '-c', script], { timeout: 120000 });
+	} catch (err) {
+		const detail = String(
+			(err as { stderr?: string; message?: string })?.stderr || (err as Error)?.message || err
+		).trim();
+		return {
+			ok: false,
+			command: manual,
+			message: `自动授权失败：${detail}`
+		};
+	}
+	return { ok: true, status: detectDsh(home) };
 }
 
 /** 把权限类错误翻译成能直接照做的提示 */

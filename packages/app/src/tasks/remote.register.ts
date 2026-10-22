@@ -21,7 +21,7 @@ import { encryptRenderString, decryptRenderString } from '../crypto';
 import { attachRendererWindow, getRemoteApiStatus, restartRemoteApi } from './remote.api';
 import { clearApiKey, generateApiKey, setApiKey, updateRemoteApiConfig } from './remote.api/config';
 import { regenerateTlsMaterial } from './remote.api/tls';
-import { detectDsh, writeDshProfile } from './dsh.bridge';
+import { detectDsh, grantDshAccess, writeDshProfile } from './dsh.bridge';
 import {
 	confirmHostKey,
 	ensureKeyHealthy,
@@ -342,6 +342,8 @@ const methods = {
 		certFingerprint?: string;
 		dshHome?: string;
 	}) => writeDshProfile(input),
+	/** 跨用户场景：弹系统认证框，给 OCS 用户授权读写 DSH 配置目录（一次性） */
+	dshBridgeGrantAccess: (input?: { dshHome?: string }) => grantDshAccess(input),
 
 	// ── SSH 反向隧道 ──
 

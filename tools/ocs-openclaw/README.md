@@ -289,8 +289,16 @@ ps -ef | grep -i -E "dsh|harness" | grep -v grep      # 记下 DSH 是怎么起�
 - 找到但**当前 OCS 用户读不了**时不会说"没检测到"，而是明确显示
   「检测到 X，但当前用户（A）无权读取——DSH 由 B 运行」，并在卡片上给出可复制的 root 命令。
 
-> 跨用户时即使检测到了也写不进去（`/root` 是 0700）：用卡片上的 root 命令跑
-> `setup-same-host.sh`，或者把 DSH 改成和 OCS 同一个用户运行。
+> **跨用户也能在设置页里直接配置**（OCS ≥ 2.13.13）：卡片上的「授权 OCS 访问」会通过 polkit
+> 弹出系统认证框，以 root 执行一次 `setfacl`——祖先目录只加穿透 `x`，`profiles/` 及其子项加
+> `rwX` 并设置默认 ACL（DSH 以后新建的 profile/备份同样继承）。授权后不需要再 sudo，
+> 选 profile、生成密钥、写入都在设置页完成。
+>
+> - 只改 ACL，不改属主与权限位；撤销：`sudo setfacl -R -x u:<OCS用户> <DSH目录>/profiles`。
+> - 没有图形会话或没有 polkit 认证代理时，自动授权会失败，卡片会显示等价的
+>   `sudo /bin/sh -c '…'` 命令供复制执行（效果相同）。
+> - 不想授权也可以：用卡片上的 root 命令跑 `setup-same-host.sh`（一次性写入），
+>   或把 DSH 改成和 OCS 同一个用户运行。授权后 OCS 用户即可读写 DSH 的 profiles 配置目录。
 
 **都不确定时，手工定位**（最可靠）：
 
@@ -342,6 +350,8 @@ node check-ocs.mjs --uid <某个浏览器uid>
 
 - 自动检测 DSH 数据目录（`DSH_HOME` / `~/.dsh` / `/root/deepseek-harness` / `~/deepseek-harness`，
   并能自动钻进 `<目录>/.dsh`）；也可以手工填——**填哪一层都行**，程序会找 `profiles/` 在哪；
+- **DSH 与 OCS 不同用户时**（如 DSH 用 root）：点「授权 OCS 访问」，polkit 弹窗认证一次后
+  以 root 加 ACL，之后这里就能直接读写配置；没有 polkit 代理时会给出等价的 sudo 命令；
 - 选 profile、确认 OCS 地址（默认 `https://127.0.0.1:<端口>`）、填密钥（没有就点「生成新密钥」，会顺手填入）；
 - 点「写入 DSH 配置」：写一段**带标记的受管块**（重复点只覆盖那一段）、自动备份、文件权限 600；
 - 卡片里会直接给出下一步（重启 DSH）和通知命令。
