@@ -65,6 +65,8 @@ export interface DshNotifyInput {
 	ocsBase: string;
 	/** 远程 API 密钥明文 */
 	apiKey: string;
+	/** 自签证书的 SHA-256 指纹（留空则不校验，建议填） */
+	certFingerprint?: string;
 	botId: string;
 	targetId: string;
 	/** 投递接口地址，留空用默认的 127.0.0.1:3080 */
@@ -150,7 +152,8 @@ function validate(input: DshNotifyInput): DshNotifyInput {
 	if (deliveryUrl && !/^https?:\/\//i.test(deliveryUrl)) {
 		throw new Error('投递地址必须以 http(s):// 开头');
 	}
-	return { ocsBase, apiKey, botId, targetId, deliveryUrl, intervalSec: rawInterval };
+	const certFingerprint = String(input?.certFingerprint || '').trim();
+	return { ocsBase, apiKey, certFingerprint, botId, targetId, deliveryUrl, intervalSec: rawInterval };
 }
 
 export interface DshNotifyEntry {
@@ -300,6 +303,10 @@ export function startDshNotify(input: DshNotifyInput): DshNotifyStatus {
 	};
 	if (cfg.deliveryUrl) {
 		env.DSH_DELIVERY_URL = cfg.deliveryUrl;
+	}
+	if (cfg.certFingerprint) {
+		// 让 watcher 也做证书指纹固定（否则启动时会提示“未校验服务器证书”）
+		env.OCS_CERT_SHA256 = cfg.certFingerprint;
 	}
 
 	logLines = [];

@@ -742,6 +742,7 @@ function buildNotifyInput() {
 	return {
 		ocsBase: state.ocsBase.trim() || `https://127.0.0.1:${state.status?.remoteApi?.port || 15320}`,
 		apiKey: state.apiKey.trim() || notify.value.apiKey,
+		certFingerprint: state.status?.remoteApi?.certFingerprint || '',
 		botId: notify.value.botId.trim(),
 		targetId: notify.value.targetId.trim(),
 		deliveryUrl: notify.value.deliveryUrl.trim() || undefined,

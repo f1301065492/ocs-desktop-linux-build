@@ -93,6 +93,7 @@ async function startDshNotifyIfEnabled() {
 		await remote.methods.call('dshNotifyStart', {
 			ocsBase: `https://127.0.0.1:${port}`,
 			apiKey: cfg.apiKey,
+			certFingerprint: status?.remoteApi?.certFingerprint || '',
 			botId: cfg.botId,
 			targetId: cfg.targetId,
 			deliveryUrl: cfg.deliveryUrl || undefined,
