@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DSH_HOME="${DSH_HOME:-/root/.dsh}"
 PROFILE='web'
 BASE='https://127.0.0.1:15320'
+BASE_SET=0
 KEY=''
 FP=''
 
@@ -31,7 +32,7 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 		--profile) PROFILE="$2"; shift 2 ;;
 		--dsh-home) DSH_HOME="$2"; shift 2 ;;
-		--base) BASE="$2"; shift 2 ;;
+		--base) BASE="$2"; BASE_SET=1; shift 2 ;;
 		--key) KEY="$2"; shift 2 ;;
 		--fingerprint) FP="$2"; shift 2 ;;
 		-h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -48,16 +49,29 @@ if [ -d "$DSH_HOME/.dsh/profiles" ]; then
 fi
 [ -d "$DSH_HOME/profiles/$PROFILE" ] || fail "找不到 profile：$DSH_HOME/profiles/$PROFILE"
 
+DEST="$DSH_HOME/profiles/$PROFILE/node_modules/ocs-command"
+PATCH="$DSH_HOME/profiles/$PROFILE/cordis.patch.yml"
+[ -f "$PATCH" ] || fail "找不到 $PATCH"
+
+# 未显式提供时，从现有的 MCP 受管块里读取同一份远程 API 配置
+if [ -z "$KEY" ]; then
+	KEY="$(sed -n "s/.*OCS_API_KEY:[[:space:]]*'\([^']*\)'.*/\1/p" "$PATCH" | head -n 1)"
+	[ -n "$KEY" ] && info '已从现有 MCP 配置读取密钥'
+fi
+if [ -z "$FP" ]; then
+	FP="$(sed -n "s/.*OCS_CERT_SHA256:[[:space:]]*'\([^']*\)'.*/\1/p" "$PATCH" | head -n 1)"
+fi
+if [ "$BASE_SET" = 0 ]; then
+	EXISTING_BASE="$(sed -n "s/.*OCS_BASE:[[:space:]]*'\([^']*\)'.*/\1/p" "$PATCH" | head -n 1)"
+	[ -n "$EXISTING_BASE" ] && BASE="$EXISTING_BASE"
+fi
+
 if [ -z "$KEY" ]; then
 	printf '  粘贴 OCS 远程 API 密钥（输入不回显）：'
 	read -rsp '' KEY || true
 	printf '\n'
 fi
 [ -n "$KEY" ] || fail '缺少 --key（OCS 设置 → 远程 API 里生成的那串）'
-
-DEST="$DSH_HOME/profiles/$PROFILE/node_modules/ocs-command"
-PATCH="$DSH_HOME/profiles/$PROFILE/cordis.patch.yml"
-[ -f "$PATCH" ] || fail "找不到 $PATCH"
 
 step '1. 安装插件文件'
 mkdir -p "$DEST"
