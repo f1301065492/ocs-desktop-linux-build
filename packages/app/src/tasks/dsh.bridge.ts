@@ -653,7 +653,9 @@ export async function grantDshAccess(input?: DshGrantInput): Promise<DshGrantRes
 		return { ok: false, message: '该功能仅支持 Linux（依赖 POSIX ACL 与 polkit）' };
 	}
 	const home = resolveDshHome(input?.dshHome);
-	if (!path.isAbsolute(home) || !fs.existsSync(path.join(home, 'profiles'))) {
+	// 注意：跨用户时 existsSync 会因 EACCES 返回 false，不能据此判断"目录不存在"——
+	// 授权要解决的正是"存在但读不了"，所以用 statKind（把 EACCES 当作存在）来判断。
+	if (!path.isAbsolute(home) || !statKind(home).exists) {
 		return { ok: false, message: `找不到 DSH 数据目录：${home}` };
 	}
 	const user = currentUser();
