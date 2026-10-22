@@ -19,9 +19,16 @@ import { getBrowserMajorVersion, getExtensionPaths } from '../utils/browser';
 import { AppStore } from '../../types';
 import { encryptRenderString, decryptRenderString } from '../crypto';
 import { attachRendererWindow, getRemoteApiStatus, restartRemoteApi } from './remote.api';
-import { clearApiKey, generateApiKey, setApiKey, updateRemoteApiConfig } from './remote.api/config';
+import {
+	clearApiKey,
+	generateApiKey,
+	rememberApiKey,
+	revealApiKey,
+	setApiKey,
+	updateRemoteApiConfig
+} from './remote.api/config';
 import { regenerateTlsMaterial } from './remote.api/tls';
-import { detectDsh, grantDshAccess, writeDshProfile } from './dsh.bridge';
+import { detectDsh, detectDshConnection, grantDshAccess, writeDshProfile } from './dsh.bridge';
 import { dshNotifyStatus, startDshNotify, stopDshNotify, testDshNotify } from './dsh.notify';
 import type { DshNotifyInput } from './dsh.notify';
 import {
@@ -312,6 +319,10 @@ const methods = {
 		await restartRemoteApi();
 		return getRemoteApiStatus();
 	},
+	/** 设置页回填用：取回加密保存的密钥明文（没有加密副本时为空串） */
+	remoteApiRevealKey: () => revealApiKey(),
+	/** 用户手工粘贴密钥后，校验通过则补一份加密副本，供下次自动回填 */
+	remoteApiRememberKey: (plaintext: string) => rememberApiKey(plaintext),
 	/** 重新生成自签证书（会让调用方此前固定的指纹失效） */
 	remoteApiRegenerateCert: async () => {
 		await regenerateTlsMaterial();
@@ -347,6 +358,8 @@ const methods = {
 	}) => writeDshProfile(input),
 	/** 跨用户场景：弹系统认证框，给 OCS 用户授权读写 DSH 配置目录（一次性） */
 	dshBridgeGrantAccess: (input?: { dshHome?: string }) => grantDshAccess(input),
+	/** 设置页状态图标：DSH 主进程与 OCS 桥接进程是否都在运行 */
+	dshConnectionStatus: () => detectDshConnection(),
 
 	// ── 主动通知（OCS → DSH，零 token） ──
 	dshNotifyStatus: () => dshNotifyStatus(),

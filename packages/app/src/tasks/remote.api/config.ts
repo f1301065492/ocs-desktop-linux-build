@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import defaultsDeep from 'lodash/defaultsDeep';
 import { store, OriginalAppStore } from '../../store';
+import { encryptRenderString, decryptRenderString } from '../../crypto';
 
 export type RemoteApiConfig = typeof OriginalAppStore.remoteApi;
 
@@ -52,8 +53,24 @@ export function setApiKey(plaintext: string): RemoteApiConfig {
 		keyAlgo: 'scrypt',
 		keySalt: salt.toString('base64'),
 		keyHash: hash.toString('base64'),
+		keyEnc: encryptKeyQuietly(plaintext),
 		keyCreatedAt: Date.now()
 	});
+}
+
+/**
+ * 加密保存密钥明文，供设置页回填。
+ *
+ * 密钥链不可用（或初始化尚未完成）时返回空串——此时退化为"只存哈希"，
+ * 设置页仍然要求用户手工粘贴，不会影响鉴权本身。
+ */
+function encryptKeyQuietly(plaintext: string): string {
+	try {
+		// 与 renderer store 用同一套自适应加密：keytar AES 优先，否则 safeStorage
+		return encryptRenderString(plaintext);
+	} catch {
+		return '';
+	}
 }
 
 /**
@@ -68,7 +85,39 @@ export function generateApiKey(): { apiKey: string; config: RemoteApiConfig } {
 /** 清空密钥（同时清缓存） */
 export function clearApiKey(): RemoteApiConfig {
 	verifyCache.clear();
-	return updateRemoteApiConfig({ keySalt: '', keyHash: '', keyCreatedAt: 0 });
+	return updateRemoteApiConfig({ keySalt: '', keyHash: '', keyEnc: '', keyCreatedAt: 0 });
+}
+
+/** 取回密钥明文（设置页自动回填用）；没有加密副本或解密失败时返回空串 */
+export function revealApiKey(): string {
+	const config = getRemoteApiConfig();
+	if (!config.keyEnc) {
+		return '';
+	}
+	try {
+		return decryptRenderString(config.keyEnc);
+	} catch {
+		return '';
+	}
+}
+
+/**
+ * 记住用户手工粘贴的密钥（校验通过才保存）。
+ *
+ * 用于"密钥是在别处生成、粘贴进来的"场景：只要和当前哈希匹配，
+ * 就补一份加密副本，下次打开设置页即可自动回填。
+ */
+export async function rememberApiKey(plaintext: string): Promise<boolean> {
+	const value = String(plaintext || '');
+	if (!value || !(await verifyApiKey(value))) {
+		return false;
+	}
+	const keyEnc = encryptKeyQuietly(value);
+	if (!keyEnc) {
+		return false;
+	}
+	updateRemoteApiConfig({ keyEnc });
+	return true;
 }
 
 function derive(plaintext: string, salt: Buffer): Promise<Buffer> {

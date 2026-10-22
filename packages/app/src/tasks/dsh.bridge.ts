@@ -212,6 +212,51 @@ export function discoverDshProcesses(procRoot = '/proc', passwdPath = '/etc/pass
 	return found;
 }
 
+export interface DshConnectionStatus {
+	/** DSH 主进程是否在运行 */
+	dshRunning: boolean;
+	/** DSH 是否已经拉起 OCS 桥接进程（说明 MCP 配置已生效） */
+	bridgeRunning: boolean;
+	bridgePid: number;
+}
+
+/**
+ * 检测 DSH 与 OCS 桥接是否都在运行（设置页状态图标用）。
+ *
+ * 判据是进程而不是配置文件：配置写对了但 DSH 没重启时，桥接不会存在，
+ * 界面上应该显示"未连接"，而不是误报成功。
+ */
+export function detectDshConnection(procRoot = '/proc'): DshConnectionStatus {
+	let dshRunning = false;
+	let bridgePid = 0;
+	try {
+		for (const pid of fs.readdirSync(procRoot)) {
+			if (!/^\d+$/.test(pid)) {
+				continue;
+			}
+			try {
+				const cmdline = fs.readFileSync(path.join(procRoot, pid, 'cmdline'), 'utf8').replace(/\0/g, ' ');
+				const isBridge = cmdline.includes('ocs-mcp-server.mjs');
+				if (isBridge) {
+					if (!bridgePid) {
+						bridgePid = Number(pid);
+					}
+				} else if (!dshRunning && looksLikeDsh(cmdline)) {
+					dshRunning = true;
+				}
+			} catch {
+				// 进程在扫描期间退出：跳过
+			}
+			if (dshRunning && bridgePid) {
+				break;
+			}
+		}
+	} catch {
+		// 没有 /proc（Windows/macOS）：返回未连接
+	}
+	return { dshRunning, bridgeRunning: bridgePid > 0, bridgePid };
+}
+
 function dedupe(list: string[]): string[] {
 	const seen = new Set<string>();
 	const out: string[] = [];

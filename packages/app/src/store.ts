@@ -56,6 +56,8 @@ export const OriginalAppStore = {
 		keySalt: '',
 		/** scrypt 派生结果（base64，64 字节） */
 		keyHash: '',
+		/** 加密保存的密钥明文（供设置页自动回填；密钥链不可用时为空） */
+		keyEnc: '',
 		/** 密钥生成时间，用于设置页展示 */
 		keyCreatedAt: 0,
 		/** 单次启动任务的超时时间（毫秒） */

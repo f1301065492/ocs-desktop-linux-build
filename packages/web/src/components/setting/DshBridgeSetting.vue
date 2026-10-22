@@ -12,6 +12,28 @@
 				</div>
 			</a-alert>
 
+			<Description label="连接状态">
+				<a-space>
+					<Icon
+						:type="connection.icon"
+						:color="connection.color"
+						:size="18"
+					/>
+					<a-tag :color="connection.color">{{ connection.text }}</a-tag>
+					<a-button
+						size="mini"
+						:loading="state.connLoading"
+						@click="refreshConnection(true)"
+					>
+						刷新
+					</a-button>
+				</a-space>
+				<div class="hint">
+					{{ connection.hint }}
+					（以进程为准：DSH 成功加载 OCS 桥接才算连接成功；改完配置记得重启 DSH。）
+				</div>
+			</Description>
+
 			<Description label="DSH 目录">
 				<a-space>
 					<a-input
@@ -178,7 +200,8 @@
 					</a-popconfirm>
 				</a-space>
 				<div class="hint">
-					OCS 只保存密钥的哈希、取不回明文，所以这里需要你填。点「生成新密钥」会顺手填进来（记得同步给其他调用方）。
+					OCS 只保存密钥的哈希用于鉴权；这里另外保存一份加密副本用于自动回填（随系统密钥链加密），
+					重启后不再需要重新粘贴。点「生成新密钥」会顺手填入（记得同步给其他调用方）。
 				</div>
 			</Description>
 
@@ -340,9 +363,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive } from 'vue';
+import { computed, onMounted, onUnmounted, reactive } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import Description from '../Description.vue';
+import Icon from '../Icon.vue';
 import { remote } from '../../utils/remote';
 import { store } from '../../store';
 
@@ -378,6 +402,8 @@ const state = reactive({
 	notifyPid: 0,
 	notifyLog: [] as string[],
 	toolsetBasic: false,
+	conn: null as { dshRunning: boolean; bridgeRunning: boolean; bridgePid: number } | null,
+	connLoading: false,
 	dshHome: '',
 	profile: '',
 	ocsBase: '',
@@ -393,6 +419,41 @@ const notifyStatusText = computed(() => {
 		return `运行中（pid ${state.notifyPid}）`;
 	}
 	return state.notifyBusy ? '处理中…' : '未运行';
+});
+
+/** 连接状态：以进程为准，配置写了但没重启 DSH 时不误报成功 */
+const connection = computed(() => {
+	const conn = state.conn;
+	if (conn?.dshRunning && conn?.bridgeRunning) {
+		return {
+			color: 'green',
+			icon: 'check_circle',
+			text: '已连接',
+			hint: `DSH 已加载 OCS 桥接（pid ${conn.bridgePid}）。`
+		};
+	}
+	if (conn?.dshRunning) {
+		return {
+			color: 'orange',
+			icon: 'warning',
+			text: 'DSH 运行中，桥接未加载',
+			hint: '配置可能还没生效：重启 DSH 后再看。'
+		};
+	}
+	if (conn?.bridgeRunning) {
+		return {
+			color: 'orange',
+			icon: 'warning',
+			text: '桥接在运行，未检测到 DSH',
+			hint: 'DSH 可能刚退出或换成了别的用户运行。'
+		};
+	}
+	return {
+		color: 'red',
+		icon: 'error',
+		text: '未连接',
+		hint: '没有检测到 DSH 进程，确认它正在运行。'
+	};
 });
 
 const profileOptions = computed(() => (state.status?.profiles || []).map((name) => ({ label: name, value: name })));
@@ -491,6 +552,8 @@ async function writeConfig() {
 		});
 		state.result = result;
 		Message.success('已写入 DSH 配置');
+		// 手工粘贴的密钥：校验通过后补一份加密副本，下次打开自动回填
+		remote.methods.call('remoteApiRememberKey', state.apiKey.trim()).catch(() => {});
 		await loadStatus();
 	} catch (err) {
 		Message.error('写入失败：' + String(err));
@@ -549,6 +612,30 @@ async function copyGrantCommand() {
 		Message.warning('复制失败，请手动选中复制');
 	}
 }
+
+/** 手动/定时刷新连接状态；轮询时不要闪 loading */
+async function refreshConnection(manual = false) {
+	if (manual) {
+		state.connLoading = true;
+	}
+	try {
+		state.conn = await remote.methods.call('dshConnectionStatus');
+	} catch {
+		// 轮询失败保持上一次状态
+	} finally {
+		if (manual) {
+			state.connLoading = false;
+		}
+	}
+}
+
+let connTimer: ReturnType<typeof setInterval> | null = null;
+onUnmounted(() => {
+	if (connTimer) {
+		clearInterval(connTimer);
+		connTimer = null;
+	}
+});
 
 /** 组装通知进程需要的参数：优先用当前输入，其次用已保存的 */
 function buildNotifyInput() {
@@ -621,11 +708,21 @@ async function refreshNotifyStatus() {
 
 onMounted(async () => {
 	await loadStatus();
-	// 旧配置里保存过密钥的，直接回填到两个输入框，省得重复粘贴
+	// 优先用主进程加密保存的密钥回填：重启后不需要重新粘贴
+	try {
+		const revealed = await remote.methods.call('remoteApiRevealKey');
+		if (revealed) {
+			state.apiKey = revealed;
+		}
+	} catch {
+		// 没有加密副本：保持为空，下面回退到通知配置里的密钥
+	}
 	if (!state.apiKey) {
 		state.apiKey = notify.value.apiKey;
 	}
 	refreshNotifyStatus();
+	refreshConnection();
+	connTimer = setInterval(() => refreshConnection(), 5000);
 });
 </script>
 
