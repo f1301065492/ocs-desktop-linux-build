@@ -20,17 +20,41 @@ const SHORT_UID = 8;
 const MAX_LOG_CHARS = 6000;
 
 const HELP = [
-	'/ocs 帮助                    显示本帮助',
-	'/ocs 列表                    浏览器列表（名称 / uid / 状态）',
-	'/ocs 查看 <名称|uid>          单个浏览器详情（不显示账号密码）',
-	'/ocs 日志 <名称|uid> [行数]   最近日志（默认 60 行，已脱敏）',
-	'/ocs 启动 <名称|uid>          启动浏览器（返回任务 ID）',
-	'/ocs 关闭 <名称|uid>          关闭浏览器（返回任务 ID）',
-	'/ocs 任务 <任务ID>            查询异步任务结果',
-	'/ocs 健康                    远程 API 健康状态',
-	'',
-	'说明：命令在本地执行，不经过模型、零 token；uid 可只写前 6 位。'
+	'🛠 OCS 命令（/ocs 帮助 随时查看）',
+	'────────────────',
+	'📋 /ocs 列表             查看所有浏览器',
+	'🔍 /ocs 查看 <名称|uid>   浏览器详情',
+	'📜 /ocs 日志 <名称|uid> [行数]',
+	'▶️ /ocs 启动 <名称|uid>   启动并返回任务',
+	'⏹ /ocs 关闭 <名称|uid>   关闭并返回任务',
+	'⏳ /ocs 任务 <任务ID>     查询任务结果',
+	'💚 /ocs 健康             远程 API 状态',
+	'────────────────',
+	'uid 可只写前 6 位；本地执行，不经过模型、零 token。'
 ].join('\n');
+
+/** 状态 → 图标与中文标签（API 返回的是 launched/closed/...） */
+const STATUS_VIEW = {
+	launched: ['🟢', '运行中'],
+	launching: ['🟡', '启动中'],
+	closed: ['⚪', '已关闭'],
+	closing: ['🟠', '关闭中'],
+	orphaned: ['🟠', '失联']
+};
+
+function statusBadge(status) {
+	const key = String(status || '').toLowerCase();
+	const view = STATUS_VIEW[key];
+	return view ? `${view[0]} ${view[1]}` : `❔ ${status || '未知'}`;
+}
+
+function bulletList(title, items) {
+	if (!items.length) {
+		return title;
+	}
+	const lines = items.map((item, index) => `${index === items.length - 1 ? '└─' : '├─'} ${item}`);
+	return [title, ...lines].join('\n');
+}
 
 /** 英文/中文子指令别名 → 规范动词 */
 const VERBS = new Map(
@@ -145,7 +169,8 @@ export function apply(ctx, config = {}) {
 							json = undefined;
 						}
 						if (res.statusCode && res.statusCode >= 400) {
-							const detail = json && json.error ? `${json.error.code}: ${json.error.message}` : `HTTP ${res.statusCode}`;
+							const detail =
+								json && json.error ? `${json.error.code}: ${json.error.message}` : `HTTP ${res.statusCode}`;
 							reject(new Error(detail));
 							return;
 						}
@@ -188,7 +213,11 @@ export function apply(ctx, config = {}) {
 		if (byUid.length === 1) {
 			return byUid[0];
 		}
-		const byPrefix = list.filter((item) => String(item.uid || '').toLowerCase().startsWith(wanted));
+		const byPrefix = list.filter((item) =>
+			String(item.uid || '')
+				.toLowerCase()
+				.startsWith(wanted)
+		);
 		if (byPrefix.length === 1) {
 			return byPrefix[0];
 		}
@@ -204,7 +233,11 @@ export function apply(ctx, config = {}) {
 		if (byName.length > 1) {
 			throw new Error(`名称「${query}」匹配到多台，请改用 uid：${byName.map((item) => shortUid(item.uid)).join('、')}`);
 		}
-		const byContains = list.filter((item) => String(item.name || '').toLowerCase().includes(wanted));
+		const byContains = list.filter((item) =>
+			String(item.name || '')
+				.toLowerCase()
+				.includes(wanted)
+		);
 		if (byContains.length === 1) {
 			return byContains[0];
 		}
@@ -221,12 +254,12 @@ export function apply(ctx, config = {}) {
 	async function doList() {
 		const list = unwrapBrowserList(await request('GET', '/api/v1/browsers'));
 		if (!list.length) {
-			return '（没有浏览器）';
+			return '📋 OCS 浏览器\n────────────────\n（还没有浏览器）';
 		}
 		const running = list.filter((item) => item.status === 'launched').length;
-		const lines = [`共 ${list.length} 台，运行中 ${running} 台`];
+		const lines = [`📋 OCS 浏览器 · 共 ${list.length} 台（运行中 ${running}）`, '────────────────'];
 		for (const item of list) {
-			lines.push(`- ${item.name || '(未命名)'} [${shortUid(item.uid)}] ${item.status || 'unknown'}`);
+			lines.push(`${statusBadge(item.status)}  ${item.name || '(未命名)'}  [${shortUid(item.uid)}]`);
 		}
 		return lines.join('\n');
 	}
@@ -234,33 +267,34 @@ export function apply(ctx, config = {}) {
 	async function doGet(selector) {
 		const summary = await resolveBrowser(selector);
 		const browser = (await request('GET', `/api/v1/browsers/${encodeURIComponent(summary.uid)}`)) || summary;
-		const lines = [`${browser.name || '(未命名)'} [${shortUid(browser.uid)}]`, `状态：${browser.status || 'unknown'}`];
+		const items = [`状态：${statusBadge(browser.status)}`];
 		if (browser.tags) {
 			const tags = Array.isArray(browser.tags) ? browser.tags.join('、') : String(browser.tags);
-			lines.push(`标签：${tags || '（无）'}`);
+			items.push(`标签：${tags || '（无）'}`);
 		}
 		if (browser.notes) {
-			lines.push(`备注：${browser.notes}`);
+			items.push(`备注：${browser.notes}`);
 		}
 		if (Array.isArray(browser.automationScripts) && browser.automationScripts.length) {
-			lines.push(
-				`自动化程序：${browser.automationScripts
+			items.push(
+				`自动化：${browser.automationScripts
 					.map((item) => (typeof item === 'string' ? item : item?.name || item?.id || '?'))
 					.join('、')}`
 			);
 		}
-		return lines.join('\n');
+		return bulletList(`🧩 ${browser.name || '(未命名)'} [${shortUid(browser.uid)}]`, items);
 	}
 
 	async function doLogs(selector, linesArg) {
 		const browser = await resolveBrowser(selector);
 		const requested = Math.min(200, Math.max(1, Number(linesArg) || 60));
-		const data = await request(
-			'GET',
-			`/api/v1/browsers/${encodeURIComponent(browser.uid)}/logs?lines=${requested}`
-		);
+		const data = await request('GET', `/api/v1/browsers/${encodeURIComponent(browser.uid)}/logs?lines=${requested}`);
 		const text = (data && data.text) || '（没有日志）';
-		return `日志（${browser.name || '(未命名)'} [${shortUid(browser.uid)}]）：\n${truncate(text)}`;
+		return [
+			`📜 日志 · ${browser.name || '(未命名)'} [${shortUid(browser.uid)}] · 最近 ${requested} 行`,
+			'────────────────',
+			truncate(text)
+		].join('\n');
 	}
 
 	async function doLaunch(selector) {
@@ -271,8 +305,9 @@ export function apply(ctx, config = {}) {
 		});
 		const taskId = data && data.taskId ? data.taskId : '';
 		return [
-			`已提交启动：${browser.name || '(未命名)'} [${shortUid(browser.uid)}]`,
-			taskId ? `任务 ID：${taskId}（用 /ocs 任务 ${taskId} 查看结果）` : '（接口未返回任务 ID）'
+			'▶️ 已提交启动',
+			`├─ 浏览器：${browser.name || '(未命名)'} [${shortUid(browser.uid)}]`,
+			taskId ? `└─ 任务：${taskId}（/ocs 任务 ${taskId} 查看结果）` : '└─ 接口未返回任务 ID'
 		].join('\n');
 	}
 
@@ -284,8 +319,9 @@ export function apply(ctx, config = {}) {
 		});
 		const taskId = data && data.taskId ? data.taskId : '';
 		return [
-			`已提交关闭：${browser.name || '(未命名)'} [${shortUid(browser.uid)}]`,
-			taskId ? `任务 ID：${taskId}（用 /ocs 任务 ${taskId} 查看结果）` : '（接口未返回任务 ID）'
+			'⏹ 已提交关闭',
+			`├─ 浏览器：${browser.name || '(未命名)'} [${shortUid(browser.uid)}]`,
+			taskId ? `└─ 任务：${taskId}（/ocs 任务 ${taskId} 查看结果）` : '└─ 接口未返回任务 ID'
 		].join('\n');
 	}
 
@@ -296,26 +332,29 @@ export function apply(ctx, config = {}) {
 		}
 		const data = await request('GET', `/api/v1/tasks/${encodeURIComponent(id)}`);
 		if (!data) {
-			return '任务无数据';
+			return '⏳ 任务无数据';
 		}
-		const lines = [`任务 ${data.taskId || id}`, `类型：${data.type || '?'}`, `状态：${data.state || '?'}`];
+		const items = [`类型：${data.type || '?'}`, `状态：${data.state || '?'}`];
 		if (data.error) {
-			lines.push(`错误：${typeof data.error === 'string' ? data.error : data.error.message || JSON.stringify(data.error)}`);
+			items.push(
+				`错误：${typeof data.error === 'string' ? data.error : data.error.message || JSON.stringify(data.error)}`
+			);
 		}
 		if (data.result !== undefined) {
-			lines.push(`结果：${truncate(JSON.stringify(data.result), 1500)}`);
+			items.push(`结果：${truncate(JSON.stringify(data.result), 1500)}`);
 		}
-		return lines.join('\n');
+		return bulletList(`⏳ 任务 ${data.taskId || id}`, items);
 	}
 
 	async function doHealth() {
 		const data = (await request('GET', '/api/v1/health')) || {};
-		return [
+		return bulletList('💚 OCS 健康', [
 			`版本：${data.version || '?'}`,
-			`远程 API：${data.listening ? '监听中' : '未监听'}｜渲染进程：${data.rendererReady ? '就绪' : '未就绪'}`,
+			`远程 API：${data.listening ? '✅ 监听中' : '❌ 未监听'}`,
+			`渲染进程：${data.rendererReady ? '✅ 就绪' : '❌ 未就绪'}`,
 			`证书指纹：${data.certFingerprint || '（无）'}`,
 			`地址：${(data.addresses || []).join(', ') || '（无）'}`
-		].join('\n');
+		]);
 	}
 
 	async function handler(invocation) {

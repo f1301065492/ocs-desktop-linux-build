@@ -130,6 +130,29 @@
 				</span>
 			</Description>
 
+			<Description label="IM 机器人">
+				<a-space>
+					<a-tag :color="imStatusColor">{{ imStatusText }}</a-tag>
+					<a-button
+						size="mini"
+						:loading="state.imPatching"
+						:disabled="state.imStatus ? !state.imStatus.exists : false"
+						@click="patchIm"
+					>
+						写入 / 修复补丁
+					</a-button>
+				</a-space>
+				<div class="hint">
+					让飞书里的 <code>/ocs</code> 走本地命令（零 token）。IM 插件升级会覆盖补丁，重新点一次并重启 DSH 即可。
+				</div>
+				<div
+					v-if="state.imBackup"
+					class="hint break"
+				>
+					备份：<code>{{ state.imBackup }}</code>
+				</div>
+			</Description>
+
 			<Description label="远程 API">
 				<a-space>
 					<a-tag
@@ -159,6 +182,7 @@
 					style="width: 240px"
 					:options="profileOptions"
 					placeholder="选择 profile"
+					@change="onProfileChange"
 				/>
 				<span
 					v-if="state.status?.configured?.includes(state.profile)"
@@ -416,6 +440,9 @@ const state = reactive({
 	toolsetBasic: false,
 	conn: null as { dshRunning: boolean; bridgeRunning: boolean; bridgePid: number } | null,
 	connLoading: false,
+	imStatus: null as { file: string; exists: boolean; patched: boolean; writable: boolean } | null,
+	imPatching: false,
+	imBackup: '',
 	dshHome: '',
 	profile: '',
 	ocsBase: '',
@@ -466,6 +493,32 @@ const connection = computed(() => {
 		text: '未连接',
 		hint: '没有检测到 DSH 进程，确认它正在运行。'
 	};
+});
+
+/** 飞书 /ocs 补丁状态 */
+const imStatusText = computed(() => {
+	const status = state.imStatus;
+	if (!status) {
+		return '检测中';
+	}
+	if (!status.exists) {
+		return '未安装 IM 插件';
+	}
+	if (status.patched) {
+		return status.writable ? '已写入补丁' : '已写入（只读）';
+	}
+	return status.writable ? '未写入补丁' : '未写入（无权限）';
+});
+
+const imStatusColor = computed(() => {
+	const status = state.imStatus;
+	if (!status || !status.exists) {
+		return 'gray';
+	}
+	if (status.patched) {
+		return 'green';
+	}
+	return status.writable ? 'orange' : 'red';
 });
 
 const profileOptions = computed(() => (state.status?.profiles || []).map((name) => ({ label: name, value: name })));
@@ -641,6 +694,41 @@ async function refreshConnection(manual = false) {
 	}
 }
 
+/** 查询飞书 /ocs 补丁是否已写入 */
+async function loadImStatus() {
+	try {
+		state.imStatus = await remote.methods.call('dshImPatchStatus', {
+			dshHome: state.dshHome.trim() || undefined,
+			profile: state.profile || 'web'
+		});
+	} catch {
+		state.imStatus = null;
+	}
+}
+
+/** 写入 / 修复飞书 /ocs 补丁（可重复执行；失败会提示原因） */
+async function patchIm() {
+	state.imPatching = true;
+	state.imBackup = '';
+	try {
+		const result = await remote.methods.call('dshImPatch', {
+			dshHome: state.dshHome.trim() || undefined,
+			profile: state.profile || 'web'
+		});
+		state.imBackup = result?.backup || '';
+		Message.success('已写入 IM 补丁，重启 DSH 后生效');
+		await loadImStatus();
+	} catch (err) {
+		Message.error('写入补丁失败：' + String(err));
+	} finally {
+		state.imPatching = false;
+	}
+}
+
+function onProfileChange() {
+	loadImStatus();
+}
+
 let connTimer: ReturnType<typeof setInterval> | null = null;
 onUnmounted(() => {
 	if (connTimer) {
@@ -720,6 +808,7 @@ async function refreshNotifyStatus() {
 
 onMounted(async () => {
 	await loadStatus();
+	loadImStatus();
 	// 优先用主进程加密保存的密钥回填：重启后不需要重新粘贴
 	try {
 		const revealed = await remote.methods.call('remoteApiRevealKey');

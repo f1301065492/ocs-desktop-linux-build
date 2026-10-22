@@ -29,6 +29,7 @@ import {
 } from './remote.api/config';
 import { regenerateTlsMaterial } from './remote.api/tls';
 import { detectDsh, detectDshConnection, grantDshAccess, writeDshProfile } from './dsh.bridge';
+import { imPatchStatus, patchImBridge } from './dsh.im';
 import { dshNotifyStatus, pushRealtimeNotify, startDshNotify, stopDshNotify, testDshNotify } from './dsh.notify';
 import type { DshNotifyInput } from './dsh.notify';
 import {
@@ -363,6 +364,10 @@ const methods = {
 	dshBridgeGrantAccess: (input?: { dshHome?: string }) => grantDshAccess(input),
 	/** 设置页状态图标：DSH 主进程与 OCS 桥接进程是否都在运行 */
 	dshConnectionStatus: () => detectDshConnection(),
+	/** 飞书机器人 /ocs 补丁：查询是否已写入 */
+	dshImPatchStatus: (input?: { dshHome?: string; profile?: string }) => imPatchStatus(input),
+	/** 飞书机器人 /ocs 补丁：写入 / 修复（幂等，失败自动回滚） */
+	dshImPatch: (input?: { dshHome?: string; profile?: string }) => patchImBridge(input),
 
 	// ── 主动通知（OCS → DSH，零 token） ──
 	dshNotifyStatus: () => dshNotifyStatus(),
