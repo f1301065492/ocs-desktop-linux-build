@@ -166,9 +166,8 @@ export interface DshNotifyEntry {
 	line: string;
 }
 
-/** 最近窗口内是否已推送过同一条（name + line） */
-function shouldPush(name: string, line: string): boolean {
-	const key = `${name}|${line}`;
+/** 最近窗口内是否已推送过同一个键 */
+function shouldPush(key: string): boolean {
 	const now = Date.now();
 	if (recentPushes.has(key)) {
 		return false;
@@ -224,6 +223,7 @@ function normalizeNotifyText(line: string): string {
 		.replace(ANSI_PATTERN, '')
 		.replace(/\s+/g, ' ')
 		.trim();
+	text = text.replace(/[\u200B-\u200D\uFEFF]/g, '');
 	text = text.replace(/^\[页面通知\]\s*/, '');
 	text = text.replace(/^弹窗来自[:：]?\s*OCS\s*[\d.]+\s*/i, '');
 	const wrapped = /^message success\s*\{\s*content:\s*(.*?)\s*\}$/i.exec(text);
@@ -241,6 +241,14 @@ function normalizeNotifyText(line: string): string {
 		}
 	}
 	return text;
+}
+
+/** 去重键：忽略空白、标点与零宽字符，避免同一条消息的不同排版各推一次 */
+function notifyDedupeKey(line: string): string {
+	return String(line || '')
+		.replace(/[\u200B-\u200D\uFEFF]/g, '')
+		.replace(/[\s，。！？；：、,.!?;:…—-]/g, '')
+		.toLowerCase();
 }
 
 /** 按内容挑一个图标，让推送更好扫读 */
@@ -293,7 +301,7 @@ async function deliverEntries(entries: DshNotifyEntry[]): Promise<{ pushed: numb
 	for (const entry of entries) {
 		const name = String(entry?.name || '').slice(0, 120);
 		const line = normalizeNotifyText(cleanNotifyLine(String(entry?.line || '')));
-		if (!line || !shouldPush(name, line)) {
+		if (!line || !shouldPush(`${name}|${notifyDedupeKey(line)}`)) {
 			continue;
 		}
 		kept.push({ name, line });

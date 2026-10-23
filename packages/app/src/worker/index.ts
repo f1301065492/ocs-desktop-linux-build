@@ -932,6 +932,10 @@ function browserNetworkRoute(authToken: string, browser: BrowserContext) {
 	});
 }
 
+/** 页面说明类文案（使用提示、平台列表、交流群…）不是事件，忽略 */
+const PAGE_INFORMATIONAL_RE =
+	/使用提示|兼容的网课平台|官方教程|交流群|更新日志|脚本猫|Tampermonkey|油猴|禁止|最小化|任务列表|自动阅读|积分课/;
+
 /**
  * 页面内通知监听（注入到每个页面）。
  *
@@ -945,7 +949,9 @@ const PAGE_NOTIFY_SCRIPT = String.raw`
   try {
     if (window.__ocsNotifyHook) return;
     window.__ocsNotifyHook = true;
-    var KEYWORDS = /任务点|章节|验证码|全部完成|已完成|自动化|脚本/;
+    var KEYWORDS = /任务点|章节|验证码|全部完成|已完成|登录失败|失败|错误/;
+    // 用户脚本的说明面板（使用提示/平台列表/交流群…）不是事件，直接忽略
+    var IGNORE = /使用提示|兼容的网课平台|官方教程|交流群|更新日志|脚本猫|Tampermonkey|油猴|禁止|最小化|任务列表|自动阅读|积分课/;
     var SELECTOR = '[role="dialog"],[class*="dialog"],[class*="modal"],'
       + '[class*="message-box"],[class*="toast"],[class*="notice"],'
       + '[class*="notification"]';
@@ -958,6 +964,7 @@ const PAGE_NOTIFY_SCRIPT = String.raw`
     // 让同一条消息的不同组件形式归一成同一段文字
     function cleanText(text) {
       var value = String(text || '').replace(/\s+/g, ' ').trim();
+      value = value.replace(new RegExp('[\\u200B-\\u200D\\uFEFF]', 'g'), '');
       value = value.replace(/^弹窗来自[:：]?\s*OCS\s*[\d.]+\s*/i, '');
       value = value.replace(/^提示\s*/, '');
       var changed = true;
@@ -982,7 +989,7 @@ const PAGE_NOTIFY_SCRIPT = String.raw`
     function emit(el) {
       if (!el || el.nodeType !== 1 || isNested(el)) return;
       var text = cleanText(textOf(el));
-      if (!text || text.length > 200 || !KEYWORDS.test(text)) return;
+      if (!text || text.length > 120 || IGNORE.test(text) || !KEYWORDS.test(text)) return;
       if (lastText.get(el) === text) return;
       lastText.set(el, text);
       try { console.log('[ocs-notify] ' + text); } catch (e) {}
@@ -1090,7 +1097,8 @@ function handleBrowserInit(browser: BrowserContext, config: { enable_dialog?: bo
 				return;
 			}
 			// 兜底：用户脚本直接把通知打到 console（DOM 钩子覆盖不到的组件）
-			if (text.length <= 200 && /任务点|章节.*完成|验证码|全部完成|已完成/.test(text)) {
+			const eventLike = /任务点|章节.*完成|验证码|全部完成|已完成|登录失败|失败|错误/.test(text);
+			if (text.length <= 120 && eventLike && !PAGE_INFORMATIONAL_RE.test(text)) {
 				console.log(`[页面通知] ${text.replace(/\s+/g, ' ').trim()}`);
 			}
 		});
