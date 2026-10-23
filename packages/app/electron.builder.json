@@ -40,7 +40,7 @@
 	],
 	"publish": {
 		"provider": "generic",
-		"url": "https://cdn.ocsjs.com/app/electron-updater/"
+		"url": "https://github.com/f1301065492/ocs-desktop-linux-build/releases/latest/download/"
 	},
 	"win": {
 		"icon": "public/favicon.png",

@@ -107,6 +107,14 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 
 ## 四、自动同步上游
 
+### 版本号规则（2026-10-24 起）
+
+- 对外版本 / Release tag：**`x.y.z.n`**。前三位跟随上游，第四位 `n` 是本分支扩展序号，每次发版 +1。
+- 内部 `package.json`：**`x.y.z-n`**。四段数字不是合法 semver，electron-updater 会抛
+  `ERR_UPDATER_INVALID_VERSION`，所以第四位用预发布位表示；界面与 `/health` 展示时把 `-n` 转成 `.n`。
+- `release.yml` 只递增第四位；`upstream-sync` 合并成功后把前三段更新为上游版本，核心变化时第四位归零。
+- 发布 Linux 包时必须同时上传 `latest-linux.yml`（工作流会在 electron-builder 未生成时按 AppImage 现算）。
+
 `.github/workflows/upstream-sync.yml` 每天 03:17 UTC 检查一次上游 `main`：
 
 1. 若 `upstream/main` 已是 `main` 的祖先 → 无事发生。
