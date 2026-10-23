@@ -107,11 +107,11 @@ jobs:
             echo
             echo "处理方式见仓库根目录 \`FORK.md\` 第四节：以上游新版本为基线搬运 \`ext/\`，再重落 \`[ocs-ext]\` 钩子。"
           } > "$RUNNER_TEMP/issue.md"
-          num=$(gh issue list --state open --label upstream-sync --limit 1 --json number -q '.[0].number')
+          num=$(gh issue list --state open --search '上游更新需要手动合并 in:title' --json number -q '.[0].number')
           if [ -n "$num" ]; then
             gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md"
           else
-            gh issue create --title "上游更新需要手动合并（${UPSTREAM_SHORT}）" --label upstream-sync --body-file "$RUNNER_TEMP/issue.md"
+            gh issue create --title "上游更新需要手动合并（${UPSTREAM_SHORT}）" --body-file "$RUNNER_TEMP/issue.md"
           fi
           exit 1
 
@@ -158,11 +158,11 @@ jobs:
             echo
             echo "请在本机执行 \`git merge upstream/main\` 后按 \`FORK.md\` 排查。"
           } > "$RUNNER_TEMP/issue.md"
-          num=$(gh issue list --state open --label upstream-sync --limit 1 --json number -q '.[0].number')
+          num=$(gh issue list --state open --search '上游更新检查未通过 in:title' --json number -q '.[0].number')
           if [ -n "$num" ]; then
             gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md"
           else
-            gh issue create --title "上游更新检查未通过（${UPSTREAM_SHORT}）" --label upstream-sync --body-file "$RUNNER_TEMP/issue.md"
+            gh issue create --title "上游更新检查未通过（${UPSTREAM_SHORT}）" --body-file "$RUNNER_TEMP/issue.md"
           fi
           exit 1
 
