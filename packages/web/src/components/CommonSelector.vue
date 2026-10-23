@@ -43,7 +43,7 @@
 						:hide-on-single-page="true"
 						:default-current="1"
 						:default-page-size="state.pageSize"
-						@change="(page) => (state.page = page)"
+						@change="(page: number) => (state.page = page)"
 					>
 					</a-pagination>
 				</div>

@@ -6,6 +6,19 @@
  */
 import { ScriptWorker } from './index';
 
+/**
+ * [ocs-ext] 兜底：绝不让未接住的 Promise rejection 弄死这个子进程。
+ *
+ * 这个进程要守住一个可能跑几小时的浏览器；任何漏 catch 的异步错误都不该让浏览器突然消失。
+ * 只兜 rejection，同步的 uncaughtException 仍然让它崩（状态已不可信）。
+ */
+process.on('unhandledRejection', (reason) => {
+	console.error(
+		'[worker] 未处理的 Promise rejection（已忽略，进程继续运行）：',
+		reason instanceof Error ? reason.stack : String(reason)
+	);
+});
+
 const worker = new ScriptWorker();
 
 // 监听消息

@@ -138,7 +138,8 @@ export const remote = {
 	// 注册 dialog 通信
 	dialog: registerRemote<Dialog>('dialog'),
 	// 暴露方法
-	methods: registerRemote<RemoteMethods>('methods'),
+	// [ocs-ext] 扩展 IPC 方法（远程 API / DSH / SSH / 更新源）不在 common 契约内，放宽键类型
+	methods: registerRemote<RemoteMethods & Record<string, (...args: any[]) => any>>('methods'),
 	// 日志
 	// eslint-disable-next-line no-undef
 	logger: registerRemote<LoggerCore>('logger')

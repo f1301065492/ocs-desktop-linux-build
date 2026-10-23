@@ -14,8 +14,8 @@
 					// 表格滚动区最大高度 600px（按钮已移至弹窗 footer，无需预留底部空间）
 					y: Math.min(store.render.state.height - 280, 600)
 				}"
-				@page-change="(page) => (state.pagination.current = page)"
-				@page-size-change="(size) => (state.pagination.pageSize = size)"
+				@page-change="(page: number) => (state.pagination.current = page)"
+				@page-size-change="(size: number) => (state.pagination.pageSize = size)"
 			>
 				<template #index="{ record }">
 					<span class="text-nowrap"> {{ record.index + 1 }} </span>
@@ -31,7 +31,7 @@
 							allow-clear
 							placeholder="全列填充"
 							:options="selectOptions[column.dataIndex]"
-							@change="(value) => applyHeaderSelect(column.dataIndex, value)"
+							@change="(value: any) => applyHeaderSelect(column.dataIndex, value)"
 						></a-select>
 					</div>
 				</template>

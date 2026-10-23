@@ -8,7 +8,10 @@
 				<a-radio value="github">GitHub 官方</a-radio>
 				<a-radio value="mirror">自建镜像</a-radio>
 			</a-radio-group>
-			<div class="hint">官方源直接请求 GitHub；自建镜像从下面的地址读取清单并下载安装包，适合国内网络。</div>
+			<div class="hint">
+				官方源使用软件内置的 electron-updater 更新地址；自建镜像读取「镜像地址/latest-linux.yml」(Windows 为 latest.yml)
+				与安装包，适合国内网络。
+			</div>
 		</Description>
 
 		<Description
@@ -22,7 +25,8 @@
 				placeholder="https://dl.example.com/ocs"
 			/>
 			<div class="hint">
-				客户端会读取「镜像地址/latest.json」，并按清单里的地址下载。目录结构与清单格式见仓库里的
+				客户端由 electron-updater 读取「镜像地址/latest-linux.yml」（Windows 为 latest.yml），
+				该目录需同时提供清单与安装包。结构与同步脚本见仓库里的
 				<code>tools/update-mirror/README.md</code>。
 			</div>
 		</Description>

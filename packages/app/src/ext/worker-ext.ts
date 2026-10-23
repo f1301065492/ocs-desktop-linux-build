@@ -14,11 +14,7 @@ type SendFn = (event: string, ...args: any[]) => void;
  *
  * 父进程可能并发发起多个请求，靠 requestId 区分回执归属。
  */
-export async function listPagesExt(
-	browser: BrowserContext | undefined,
-	send: SendFn,
-	options: { requestId: string }
-) {
+export async function listPagesExt(browser: BrowserContext | undefined, send: SendFn, options: { requestId: string }) {
 	const { requestId } = options;
 	try {
 		const pages = browser?.pages() ?? [];

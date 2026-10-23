@@ -111,7 +111,7 @@ const MAIN_PROCESS_OWNED_KEYS = ['remoteApi', 'remoteApiRunning', 'sshTunnel', '
  */
 export function protectMainProcessOwnedKeys(storeData: Record<string, unknown>): void {
 	for (const key of MAIN_PROCESS_OWNED_KEYS) {
-		const authoritative = (store.store as Record<string, unknown>)[key];
+		const authoritative = (store.store as unknown as Record<string, unknown>)[key];
 		if (authoritative === undefined) {
 			delete storeData[key];
 		} else {
@@ -284,6 +284,8 @@ export const EXT_METHODS = {
 		return getSshTunnelStatus();
 	}
 };
+
+export type ExtMethods = typeof EXT_METHODS;
 
 /**
  * 与上游 remote.register.ts 的另一个接点：

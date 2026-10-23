@@ -161,6 +161,8 @@ export interface ScriptWorkerBrowserConfig {
 	screenshot_preview?: boolean;
 	/** 浏览器增强（防休眠/防冻结）：附加防节流启动参数 + 注入静音音频豁免脚本 */
 	browser_enhancement?: boolean;
+	/** [ocs-ext] 启动前清除该浏览器的登录状态（cookie / 站点本地存储） */
+	clear_login_on_launch?: boolean;
 }
 
 export interface ScriptWorkerLangs {

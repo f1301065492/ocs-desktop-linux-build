@@ -203,7 +203,7 @@ const methods: RemoteMethods & ExtMethods = {
 		}
 		// [ocs-ext] 保留主进程独占的键（远程 API / SSH / 更新源）
 		protectMainProcessOwnedKeys(storeData as unknown as Record<string, unknown>);
-		store.store = storeData;
+		store.store = storeData as unknown as typeof store.store;
 	},
 	/**
 	 * 批量预下载远程用户脚本到临时目录，供本地服务器代理给拓展拦截安装。

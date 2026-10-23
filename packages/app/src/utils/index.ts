@@ -2,12 +2,11 @@ import { BrowserWindow, app, dialog } from 'electron';
 import path from 'path';
 import AdmZip from 'adm-zip';
 import axios from 'axios';
-import { createReadStream, createWriteStream, existsSync, mkdirSync } from 'fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync } from 'fs';
 import { finished, pipeline } from 'stream/promises';
 import { Logger } from '../logger';
 import xlsx from 'xlsx';
 import unzipper from 'unzipper';
-import fs from 'fs';
 
 const taskLogger = Logger('task');
 const logger = Logger('utils');
@@ -140,14 +139,14 @@ export function sleep(ms: number) {
 export function isLinuxSandboxUnavailable(): boolean {
 	if (process.platform !== 'linux') return false;
 	try {
-		if (fs.readFileSync('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', 'utf8').trim() === '1') {
+		if (readFileSync('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', 'utf8').trim() === '1') {
 			return true;
 		}
 	} catch {
 		// 该 sysctl 不存在（< Ubuntu 23.10），表示无 AppArmor 限制
 	}
 	try {
-		if (fs.readFileSync('/proc/sys/kernel/unprivileged_userns_clone', 'utf8').trim() === '0') {
+		if (readFileSync('/proc/sys/kernel/unprivileged_userns_clone', 'utf8').trim() === '0') {
 			return true;
 		}
 	} catch {

@@ -51,7 +51,8 @@ if (!gotTheLock) {
 /** 启动渲染进程 */
 function bootstrap() {
 	task('OCS启动程序', () =>
-		Promise.all([			task('初始化错误处理', () => handleError()),
+		Promise.all([
+			task('初始化错误处理', () => handleError()),
 			// 密钥初始化必须在 initStore 之前完成（initStore 同步调用 getDecryptedRenderData）
 			task('初始化加密密钥', () => initCrypto()).then(() =>
 				task('初始化本地设置', async () => {
