@@ -5,12 +5,12 @@
 				v-model="state.source"
 				size="small"
 			>
-				<a-radio value="github">GitHub 官方</a-radio>
+				<a-radio value="github">默认源（本仓库 Release）</a-radio>
 				<a-radio value="mirror">自建镜像</a-radio>
 			</a-radio-group>
 			<div class="hint">
-				官方源使用软件内置的 electron-updater 更新地址；自建镜像读取「镜像地址/latest-linux.yml」(Windows 为 latest.yml)
-				与安装包，适合国内网络。
+				默认源使用软件内置的 electron-updater 地址（本仓库 GitHub Release 的最新版）；
+				自建镜像读取「镜像地址/latest-linux.yml」(Windows 为 latest.yml) 与安装包，适合国内网络。
 			</div>
 		</Description>
 
