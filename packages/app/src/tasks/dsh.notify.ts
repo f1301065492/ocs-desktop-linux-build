@@ -47,7 +47,8 @@ const REALTIME_PATTERNS = [
 	/需要人工|人工处理|人工输入/,
 	/验证码/,
 	/错误|失败|异常|超时/,
-	/任务点|章节.*完成|全部完成|页面通知/,
+	// 只推「需要人工」的页面事件；单个任务点完成（页面任务点已完成，即将跳转）不推
+	/全部任务点|所有任务点|全部完成|所有完成|本课任务点.*完成|本章任务点.*完成/,
 	/初始化完成|浏览器已启动|已提交登录表单/
 ];
 
@@ -224,13 +225,26 @@ function normalizeNotifyText(line: string): string {
 		.replace(/\s+/g, ' ')
 		.trim();
 	text = text.replace(/[\u200B-\u200D\uFEFF]/g, '');
-	text = text.replace(/^\[页面通知\]\s*/, '');
-	text = text.replace(/^弹窗来自[:：]?\s*OCS\s*[\d.]+\s*/i, '');
-	const wrapped = /^message success\s*\{\s*content:\s*(.*?)\s*\}$/i.exec(text);
-	if (wrapped) {
-		text = wrapped[1];
+	// 前缀顺序不固定（`22:07 [页面通知] …`、`[页面通知] 22:07 [信息]: …`），循环剥到稳定为止。
+	// 时间戳不同会让同一内容各推一次，必须去掉。
+	let stripped = true;
+	while (stripped) {
+		stripped = false;
+		const before = text;
+		text = text
+			.replace(/^\d{1,2}:\d{2}(?::\d{2})?\s*/, '')
+			.replace(/^\[(?:信息|错误|警告|INFO|WARN|ERROR)\]:?\s*/i, '')
+			.replace(/^\[页面通知\]\s*/, '')
+			.replace(/^弹窗来自[:：]?\s*OCS\s*[\d.]+\s*/i, '')
+			.replace(/^提示\s*/, '');
+		const wrapped = /^message success\s*\{\s*content:\s*(.*?)\s*\}$/i.exec(text);
+		if (wrapped) {
+			text = wrapped[1];
+		}
+		if (text !== before) {
+			stripped = true;
+		}
 	}
-	text = text.replace(/^提示\s*/, '');
 	let changed = true;
 	while (changed) {
 		changed = false;

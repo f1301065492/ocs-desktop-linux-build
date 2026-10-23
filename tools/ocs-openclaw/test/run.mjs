@@ -301,6 +301,12 @@ console.log('\n=== ocs-watch（推送）===');
 	const pageNotifyRun = await runWatch(env, stateFile);
 	checkMatch('页面内弹窗会进入播报', pageNotifyRun, /全部任务点已完成/);
 
+	// 单个任务点完成只是流程进度，不需要人工处理 → 不播报
+	mock.appendLog(UID, '页面任务点已完成，即将跳转。\n');
+	mock.appendLog(UID, '页面任务点数量为空! 请刷新重试! ×\n');
+	const progressRun = await runWatch(env, stateFile);
+	check('单个任务点完成 / 数量为空不播报', progressRun, 'HEARTBEAT_OK');
+
 	// --deliver parent：把结构化通知交给父进程（OCS 主进程）统一去重/投递
 	mock.appendLog(UID, '超星：检测到验证码，需要人工处理\n');
 	const parentRun = await runWatchDetailed(env, stateFile, ['--deliver', 'parent']);

@@ -932,6 +932,10 @@ function browserNetworkRoute(authToken: string, browser: BrowserContext) {
 	});
 }
 
+/** 只推送需要人工处理的事件（与注入脚本里的 KEYWORDS 保持一致） */
+const PAGE_EVENT_RE =
+	/全部任务点|所有任务点|全部完成|所有完成|本课任务点.*完成|本章任务点.*完成|验证码|需要人工|人工处理|人工输入|请手动|登录失败|密码错误|账号或密码|滑块|人脸|扫码/;
+
 /** 页面说明类文案（使用提示、平台列表、交流群…）不是事件，忽略 */
 const PAGE_INFORMATIONAL_RE =
 	/使用提示|兼容的网课平台|官方教程|交流群|更新日志|脚本猫|Tampermonkey|油猴|禁止|最小化|任务列表|自动阅读|积分课/;
@@ -949,7 +953,7 @@ const PAGE_NOTIFY_SCRIPT = String.raw`
   try {
     if (window.__ocsNotifyHook) return;
     window.__ocsNotifyHook = true;
-    var KEYWORDS = /任务点|章节|验证码|全部完成|已完成|登录失败|失败|错误/;
+    var KEYWORDS = /全部任务点|所有任务点|全部完成|所有完成|本课任务点.*完成|本章任务点.*完成|验证码|需要人工|人工处理|人工输入|请手动|登录失败|密码错误|账号或密码|滑块|人脸|扫码/;
     // 用户脚本的说明面板（使用提示/平台列表/交流群…）不是事件，直接忽略
     var IGNORE = /使用提示|兼容的网课平台|官方教程|交流群|更新日志|脚本猫|Tampermonkey|油猴|禁止|最小化|任务列表|自动阅读|积分课/;
     var SELECTOR = '[role="dialog"],[class*="dialog"],[class*="modal"],'
@@ -1097,7 +1101,7 @@ function handleBrowserInit(browser: BrowserContext, config: { enable_dialog?: bo
 				return;
 			}
 			// 兜底：用户脚本直接把通知打到 console（DOM 钩子覆盖不到的组件）
-			const eventLike = /任务点|章节.*完成|验证码|全部完成|已完成|登录失败|失败|错误/.test(text);
+			const eventLike = PAGE_EVENT_RE.test(text);
 			if (text.length <= 120 && eventLike && !PAGE_INFORMATIONAL_RE.test(text)) {
 				console.log(`[页面通知] ${text.replace(/\s+/g, ' ').trim()}`);
 			}
