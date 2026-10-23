@@ -19,7 +19,9 @@ export class Browser extends Entity implements BrowserOptions {
 	histories: BrowserOperateHistory[];
 	parent: string;
 	automationScripts: RawAutomationScript[];
+	// [ocs-ext] 按浏览器记录已安装脚本版本（老数据为空对象）
 	userscriptVersions: Record<string, string>;
+	// [ocs-ext] 远程 API 元数据
 	remoteMeta?: BrowserRemoteMeta;
 
 	constructor(opts: BrowserOptions & EntityOptions) {

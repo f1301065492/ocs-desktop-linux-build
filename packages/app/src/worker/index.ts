@@ -9,6 +9,9 @@ import { Config } from '../scripts/interface';
 import _get from 'lodash/get';
 import child_process from 'child_process';
 import { getBrowserMajorVersion, getExtensionPaths } from '../utils/browser';
+import { PAGE_NOTIFY_SCRIPT, installPageNotifier } from '../ext/page-notify';
+import { listPagesExt, screenshotPageExt } from '../ext/worker-ext';
+import { clearLoginState } from '../ext/login-state';
 
 const { bgRedBright, bgBlueBright, bgYellowBright, bgGray } = new Chalk({ level: 2 });
 
@@ -19,7 +22,7 @@ type BrowserInfo = { name: string; notes: string; tags: { color: string; name: s
 type BrowserConfig = {
 	/** 是否启用弹窗 */
 	enable_dialog?: boolean;
-	/** 启动前清除该浏览器的登录状态（cookie / 站点本地存储） */
+	/** [ocs-ext] 启动前清除该浏览器的登录状态（cookie / 站点本地存储） */
 	clear_login_on_launch?: boolean;
 };
 
@@ -304,35 +307,12 @@ export class ScriptWorker {
 		}, 200);
 	}
 
-	/**
-	 * 列出当前打开的所有页面。
-	 *
-	 * IPC 是单向的，父进程拿不到返回值，所以结果通过 send 事件回传，
-	 * 且必须带上 requestId —— 父进程可能并发发起多个请求，靠它区分回执归属。
-	 */
+	/** 列出当前打开的所有页面（扩展实现，见 src/ext/worker-ext.ts） */
 	async listPages(options: { requestId: string }) {
-		const { requestId } = options;
-		try {
-			const pages = this.browser?.pages() ?? [];
-			const list = await Promise.all(
-				pages.map(async (page, index) => ({
-					index,
-					url: page.url(),
-					title: await page.title().catch(() => '')
-				}))
-			);
-			send('pages-result', { requestId, data: { pages: list } });
-		} catch (err) {
-			send('pages-result', { requestId, error: toWorkerError(err) });
-		}
+		return listPagesExt(this.browser, send, options);
 	}
 
-	/**
-	 * 按需截取某个页面的画面。
-	 *
-	 * 用 page.screenshot() 而不是主进程的 desktopCapturer：前者截的是页面内容，
-	 * 窗口被最小化或被其他窗口遮挡时依然能截到，更适合服务端无人值守的场景。
-	 */
+	/** 按需截取某个页面的画面（扩展实现，见 src/ext/worker-ext.ts） */
 	async screenshotPage(options: {
 		requestId: string;
 		/** 目标页 URL 片段，不传则取最后一个页面 */
@@ -341,51 +321,7 @@ export class ScriptWorker {
 		quality?: number;
 		fullPage?: boolean;
 	}) {
-		const { requestId, pageUrl, format, quality, fullPage } = options;
-		try {
-			const pages = this.browser?.pages() ?? [];
-			if (pages.length === 0) {
-				send('screenshot-result', {
-					requestId,
-					error: { code: 'NO_PAGE', message: '浏览器当前没有打开的页面' }
-				});
-				return;
-			}
-
-			// 书签导航页是第一个页面，自动化脚本打开的业务页在后面，所以默认取最后一个
-			const page = pageUrl ? pages.find((p) => p.url().includes(pageUrl)) : pages[pages.length - 1];
-			if (!page) {
-				send('screenshot-result', {
-					requestId,
-					error: {
-						code: 'PAGE_NOT_FOUND',
-						message: `没有匹配 "${pageUrl}" 的页面，可用页面: ${pages.map((p) => p.url()).join(' | ')}`
-					}
-				});
-				return;
-			}
-
-			const type = format === 'png' ? 'png' : 'jpeg';
-			const buffer = await page.screenshot({
-				type,
-				// quality 只对 jpeg 有效，传给 png 会被 Playwright 拒绝
-				...(type === 'jpeg' ? { quality: clampQuality(quality) } : {}),
-				fullPage: Boolean(fullPage)
-			});
-
-			send('screenshot-result', {
-				requestId,
-				data: {
-					base64: buffer.toString('base64'),
-					mimeType: type === 'png' ? 'image/png' : 'image/jpeg',
-					size: buffer.length,
-					url: page.url(),
-					title: await page.title().catch(() => '')
-				}
-			});
-		} catch (err) {
-			send('screenshot-result', { requestId, error: toWorkerError(err) });
-		}
+		return screenshotPageExt(this.browser, send, options);
 	}
 
 	kill() {
@@ -417,51 +353,6 @@ function formatExtensionArguments(extensionPaths: string[]) {
 
 function loggerPrefix() {
 	return `[OCS] ${new Date().toLocaleTimeString()}`;
-}
-
-/**
- * 浏览器档案里与「登录状态」有关的路径。
- *
- * 各站点把登录态存在 cookie 与站点本地存储里，而 Chrome 的落盘位置随版本变过，新旧两处都列上
- * （不存在时 rmSync 是空操作）：
- * - cookie：`Default/Network/Cookies`（较新版）与 `Default/Cookies`（较老版）
- * - 站点存储：`Local Storage` / `Session Storage` / `IndexedDB` / `Service Worker`
- */
-const LOGIN_STATE_PATHS = [
-	'Default/Cookies',
-	'Default/Cookies-journal',
-	'Default/Network/Cookies',
-	'Default/Network/Cookies-journal',
-	'Default/Local Storage',
-	'Default/Session Storage',
-	'Default/IndexedDB',
-	'Default/Service Worker'
-];
-
-/**
- * 清除该浏览器档案里的登录状态（设置里打开「每次启动前清除登录状态」时调用）。
- *
- * 刻意**不删整个 userDataDir**：油猴脚本（ScriptCat / Tampermonkey）和它们的配置都存在档案里，
- * 整个删掉等于每次启动都要重装一遍用户脚本——那是另一条链路的事，不该被这个开关带上。
- *
- * 放在**启动前**而不是关闭时清理：浏览器异常退出、进程被杀、机器断电时关闭流程根本不会执行，
- * 而启动前清理每次必定跑到。
- */
-function clearLoginState(userDataDir: string) {
-	let removed = 0;
-	for (const relative of LOGIN_STATE_PATHS) {
-		try {
-			const target = path.join(userDataDir, relative);
-			if (fs.existsSync(target)) {
-				fs.rmSync(target, { recursive: true, force: true });
-				removed++;
-			}
-		} catch (err) {
-			// 删不掉不该挡住启动：最坏情况是这次仍旧带着旧登录态，登录脚本还有机会自己识别出来
-			console.error(`清除登录状态失败（${relative}）：`, err instanceof Error ? err.message : String(err));
-		}
-	}
-	console.log(`已清除该浏览器的登录状态（cookie / 站点本地存储，清理了 ${removed} 处），本次将重新登录`);
 }
 
 /**
@@ -506,6 +397,7 @@ export async function launchBrowser({
 	config?: BrowserConfig;
 	onLaunch?: (browser: BrowserContext) => void;
 }) {
+	// [ocs-ext] 启动前清除登录状态（实现见 src/ext/login-state.ts）
 	if (config?.clear_login_on_launch) {
 		clearLoginState(userDataDir);
 	}
@@ -661,28 +553,6 @@ async function initScripts(urls: string[], browser: BrowserContext) {
 
 function send(event: string, ...args: any[]) {
 	process.send?.({ event, args });
-}
-
-/**
- * 把异常整理成可跨 IPC 回传的纯对象。
- *
- * 必须回传纯对象而不是 Error 实例：父进程的 shell.on('message') 是结构化克隆，
- * 且这里的错误最终要变成对外 API 的错误码，字符串对最省事也最不容易出意外。
- */
-function toWorkerError(err: unknown): { code: string; message: string } {
-	const code = (err as { code?: unknown })?.code;
-	return {
-		code: typeof code === 'string' && code ? code : 'WORKER_ERROR',
-		message: err instanceof Error ? err.message : String(err)
-	};
-}
-
-/** jpeg 质量钳制在 Playwright 允许的 0-100 区间内 */
-function clampQuality(quality: number | undefined): number {
-	if (typeof quality !== 'number' || !Number.isFinite(quality)) {
-		return 70;
-	}
-	return Math.min(100, Math.max(0, Math.round(quality)));
 }
 
 function sleep(t: number) {
@@ -932,146 +802,12 @@ function browserNetworkRoute(authToken: string, browser: BrowserContext) {
 	});
 }
 
-/** 只推送需要人工处理的事件（与注入脚本里的 KEYWORDS 保持一致） */
-const PAGE_EVENT_RE =
-	/全部任务点|所有任务点|全部完成|所有完成|本课任务点.*完成|本章任务点.*完成|验证码|需要人工|人工处理|人工输入|请手动|登录失败|密码错误|账号或密码|滑块|人脸|扫码/;
-
-/** 页面说明类文案（使用提示、平台列表、交流群…）不是事件，忽略 */
-const PAGE_INFORMATIONAL_RE =
-	/使用提示|兼容的网课平台|官方教程|交流群|更新日志|脚本猫|Tampermonkey|油猴|禁止|最小化|任务列表|自动阅读|积分课/;
-
-/**
- * 页面内通知监听（注入到每个页面）。
- *
- * 用户脚本（如 OCS 网课助手）的「全部任务点已完成」「检测到验证码」这类提示
- * 画在页面 DOM 里，不经过桌面端。这里监听新增的对话框/浮层，命中关键词就
- * `console.log('[ocs-notify] …')`，由 page.on('console') 转发到 worker 日志，
- * 从而进入主动通知链路。
- */
-const PAGE_NOTIFY_SCRIPT = String.raw`
-(() => {
-  try {
-    if (window.__ocsNotifyHook) return;
-    window.__ocsNotifyHook = true;
-    var KEYWORDS = /全部任务点|所有任务点|全部完成|所有完成|本课任务点.*完成|本章任务点.*完成|验证码|需要人工|人工处理|人工输入|请手动|登录失败|密码错误|账号或密码|滑块|人脸|扫码/;
-    // 用户脚本的说明面板（使用提示/平台列表/交流群…）不是事件，直接忽略
-    var IGNORE = /使用提示|兼容的网课平台|官方教程|交流群|更新日志|脚本猫|Tampermonkey|油猴|禁止|最小化|任务列表|自动阅读|积分课/;
-    var SELECTOR = '[role="dialog"],[class*="dialog"],[class*="modal"],'
-      + '[class*="message-box"],[class*="toast"],[class*="notice"],'
-      + '[class*="notification"]';
-    var lastText = new WeakMap();
-    var observedRoots = new WeakSet();
-    function textOf(el) {
-      return String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-    }
-    // 去掉弹窗自带的 UI 前缀/后缀（“弹窗来自：OCS 5.2.1 … 确定 ×”），
-    // 让同一条消息的不同组件形式归一成同一段文字
-    function cleanText(text) {
-      var value = String(text || '').replace(/\s+/g, ' ').trim();
-      value = value.replace(new RegExp('[\\u200B-\\u200D\\uFEFF]', 'g'), '');
-      value = value.replace(/^弹窗来自[:：]?\s*OCS\s*[\d.]+\s*/i, '');
-      value = value.replace(/^提示\s*/, '');
-      var changed = true;
-      while (changed) {
-        changed = false;
-        var next = value.replace(/\s*(?:×|✕|确定|取消|关闭|知道了|上一节|下一节|去学习)\s*$/, '').trim();
-        if (next !== value) {
-          value = next;
-          changed = true;
-        }
-      }
-      return value;
-    }
-    function isNested(el) {
-      var node = el.parentElement;
-      while (node) {
-        if (node.matches && node.matches(SELECTOR)) return true;
-        node = node.parentElement;
-      }
-      return false;
-    }
-    function emit(el) {
-      if (!el || el.nodeType !== 1 || isNested(el)) return;
-      var text = cleanText(textOf(el));
-      if (!text || text.length > 120 || IGNORE.test(text) || !KEYWORDS.test(text)) return;
-      if (lastText.get(el) === text) return;
-      lastText.set(el, text);
-      try { console.log('[ocs-notify] ' + text); } catch (e) {}
-    }
-    function scanRoot(root) {
-      if (!root || !root.querySelectorAll) return;
-      var nodes = root.querySelectorAll(SELECTOR);
-      for (var i = 0; i < nodes.length; i += 1) emit(nodes[i]);
-    }
-    function observeRoot(root) {
-      if (!root || observedRoots.has(root)) return;
-      observedRoots.add(root);
-      try {
-        observer.observe(root, { childList: true, subtree: true, characterData: true });
-      } catch (e) {}
-      scanRoot(root);
-    }
-    function inspect(el) {
-      if (!el || el.nodeType !== 1) return;
-      if (el.matches && el.matches(SELECTOR)) {
-        emit(el);
-      } else {
-        // 非标准弹窗（自定义 class）：只对短文本 + 命中关键词的浮层做判断，避免扫描整页
-        var text = String(el.textContent || '');
-        if (text.length > 400 || !KEYWORDS.test(text)) return;
-        try {
-          var style = getComputedStyle(el);
-          if (style.position !== 'fixed' && style.position !== 'absolute' && !style.zIndex) return;
-        } catch (e) { return; }
-        emit(el);
-      }
-      if (el.querySelectorAll) {
-        var nodes = el.querySelectorAll(SELECTOR);
-        for (var i = 0; i < nodes.length; i += 1) emit(nodes[i]);
-      }
-      if (el.shadowRoot) observeRoot(el.shadowRoot);
-    }
-    function handle(records) {
-      for (var i = 0; i < records.length; i += 1) {
-        var record = records[i];
-        if (record.type === 'characterData') {
-          inspect(record.target.parentElement);
-          continue;
-        }
-        for (var j = 0; j < record.addedNodes.length; j += 1) inspect(record.addedNodes[j]);
-      }
-    }
-    var observer = new MutationObserver(handle);
-    // 用户脚本的弹窗常放在 Shadow DOM（甚至 closed）里：包装 attachShadow
-    // 拿到真实 root 后直接观察，closed 模式也能覆盖。
-    try {
-      var nativeAttach = Element.prototype.attachShadow;
-      if (typeof nativeAttach === 'function') {
-        Element.prototype.attachShadow = function (init) {
-          var root = nativeAttach.call(this, init);
-          try { observeRoot(root); } catch (e) {}
-          return root;
-        };
-      }
-    } catch (e) {}
-    function start() {
-      observeRoot(document.documentElement);
-      inspect(document.body);
-    }
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', start, { once: true });
-    } else {
-      start();
-    }
-  } catch (e) {}
-})();
-`;
-
 function handleBrowserInit(browser: BrowserContext, config: { enable_dialog?: boolean; userDataDir: string }) {
 	// 防检测
 	browser.addInitScript({
 		content: 'Object.defineProperty(navigator, "webdriver", { get: () => false });console.log(navigator)'
 	});
+	// [ocs-ext] 页面内通知监听（实现见 src/ext/page-notify.ts）
 	browser.addInitScript({ content: PAGE_NOTIFY_SCRIPT });
 
 	// 关闭检测
@@ -1091,21 +827,8 @@ function handleBrowserInit(browser: BrowserContext, config: { enable_dialog?: bo
 	});
 
 	const pageHandle = (page: Page) => {
-		// 页面内通知：注入脚本把用户脚本弹窗以 [ocs-notify] 前缀打到 console，
-		// 这里转发到 worker 日志（渲染进程会再喂给实时通知/轮询）
-		page.on('console', (message) => {
-			const text = message.text();
-			const marker = '[ocs-notify] ';
-			if (text.startsWith(marker)) {
-				console.log(`[页面通知] ${text.slice(marker.length)}`);
-				return;
-			}
-			// 兜底：用户脚本直接把通知打到 console（DOM 钩子覆盖不到的组件）
-			const eventLike = PAGE_EVENT_RE.test(text);
-			if (text.length <= 120 && eventLike && !PAGE_INFORMATIONAL_RE.test(text)) {
-				console.log(`[页面通知] ${text.replace(/\s+/g, ' ').trim()}`);
-			}
-		});
+		// 页面内通知：把用户脚本画在 DOM 里的「需要人工处理」提示转发到 worker 日志
+		installPageNotifier(page);
 
 		// 按照文档的说法，如果不进行任何处理，则动作会和原版浏览器一致
 		// 如果不进行监听 page.on('dialog') playwright 会自动处理弹窗

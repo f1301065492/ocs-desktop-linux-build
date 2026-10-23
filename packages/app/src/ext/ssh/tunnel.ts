@@ -4,8 +4,8 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import defaultsDeep from 'lodash/defaultsDeep';
-import { store, OriginalAppStore } from '../store';
-import { Logger } from '../logger';
+import { store, OriginalAppStore } from '../../store';
+import { Logger } from '../../logger';
 
 const logger = Logger('ssh-tunnel');
 

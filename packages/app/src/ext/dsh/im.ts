@@ -2,8 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { Logger } from '../logger';
-import { resolveDshHome } from './dsh.bridge';
+import { Logger } from '../../logger';
+import { resolveDshHome } from './bridge';
 
 const execFileAsync = promisify(execFile);
 

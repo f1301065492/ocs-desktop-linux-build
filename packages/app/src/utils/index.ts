@@ -21,7 +21,7 @@ export async function task(name: string, func: any) {
  * 只有约 0.5 MB/s，实测 8 线程能到约 3.8 MB/s。服务端不支持 Range 时
  * 会自动回退到原来的单流下载。签名保持不变，调用方无需改动。
  */
-export { downloadFile } from './download';
+export { downloadFile } from '../ext/update/download';
 
 /**
  * 压缩文件

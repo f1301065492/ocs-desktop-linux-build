@@ -1,5 +1,5 @@
 import { store } from '../store';
-import { remote } from './remote';
+import { remote } from '../utils/remote';
 import { root } from '../fs/folder';
 
 /**

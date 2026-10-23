@@ -6,6 +6,8 @@ import { CommonUserScript } from '../types/user.script';
 import { FolderOptions } from '../fs/interface';
 import { Browser } from '../fs/browser';
 import { Folder } from '../fs/folder';
+// [ocs-ext] DSH 主动通知的默认值与旧数据迁移
+import { DEFAULT_DSH_NOTIFY, migrateDshNotify } from '../ext/dsh/store';
 
 export type StoreUserScript = { info?: CommonUserScript } & Omit<UserScripts, 'info'>;
 
@@ -120,17 +122,7 @@ export type WebStore = {
 	};
 };
 
-/** DSH 主动通知的默认值（旧版本数据里没有这个键，解密后需要补） */
-const DEFAULT_DSH_NOTIFY = {
-	enabled: false,
-	realtime: true,
-	intervalSec: 5,
-	botId: '',
-	targetId: '',
-	deliveryUrl: '',
-	apiKey: ''
-};
-
+/** DSH 主动通知的默认值来自扩展模块（src/ext/dsh/store.ts） */
 const _store: AppStore & { render: WebStore } = defaultsDeep(remote['electron-store'].get('store'), {
 	render: {
 		scripts: [],
@@ -188,6 +180,7 @@ const _store: AppStore & { render: WebStore } = defaultsDeep(remote['electron-st
 				clearLoginOnLaunch: false,
 				autoInitNewBrowser: true
 			},
+			// [ocs-ext] 主动通知（DSH）配置
 			dshNotify: {
 				...DEFAULT_DSH_NOTIFY
 			}
@@ -217,10 +210,8 @@ if (typeof _store.render === 'string') {
 		// @ts-ignore
 		const renderStr = _store.render as string;
 		const data = JSON.parse(remote.methods.callSync('decryptRenderString' as any, renderStr));
-		// 旧数据里没有新增设置项（如 dshNotify）：用默认值补齐，避免设置页读到 undefined
-		if (data && data.setting) {
-			data.setting.dshNotify = { ...DEFAULT_DSH_NOTIFY, ...(data.setting.dshNotify || {}) };
-		}
+		// [ocs-ext] 旧数据里没有新增设置项（如 dshNotify）：用默认值补齐，避免设置页读到 undefined
+		migrateDshNotify(data);
 		Reflect.set(_store, 'render', data);
 	} catch (e) {
 		console.error('数据解密失败：' + e);

@@ -264,9 +264,9 @@ grep -i '^PubkeyAuthentication' /etc/ssh/sshd_config
 <script setup lang="ts">
 import { computed, onMounted, reactive } from 'vue';
 import { Message } from '@arco-design/web-vue';
-import Description from '../Description.vue';
+import Description from '../../components/Description.vue';
 import { remote } from '../../utils/remote';
-import { remoteApiState, refreshRemoteApiState } from './remote-api.state';
+import { remoteApiState, refreshRemoteApiState } from '../remote-api/state';
 
 interface SshTunnelConfigView {
 	enabled: boolean;

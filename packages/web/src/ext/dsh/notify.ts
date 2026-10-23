@@ -1,5 +1,5 @@
-import { store } from '../store';
-import { remote } from './remote';
+import { store } from '../../store';
+import { remote } from '../../utils/remote';
 
 /**
  * 实时通知（渲染进程侧）。

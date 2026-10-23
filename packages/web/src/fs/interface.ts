@@ -34,7 +34,7 @@ export interface BrowserOperateHistory {
 }
 
 /**
- * 远程 API 创建的浏览器所携带的元数据。
+ * [ocs-ext] 远程 API 创建的浏览器所携带的元数据。
  *
  * 必须作为实体字段持久化（而不是放主进程内存），
  * 因为远程 API 的任务表不持久化，应用重启后调用方只能靠 clientToken
@@ -67,14 +67,14 @@ export interface BrowserOptions extends EntityOptions {
 	/** 自动化程序列表 */
 	automationScripts: RawAutomationScript[];
 	/**
-	 * 该浏览器（profile）上已安装的用户脚本版本，key 为脚本条目的 url，value 为版本号。
+	 * [ocs-ext] 该浏览器（profile）上已安装的用户脚本版本，key 为脚本条目的 url，value 为版本号。
 	 *
 	 * 必须按浏览器记录：每个浏览器的 userDataDir 是独立的 profile，
 	 * 里面装没装脚本、装的是哪个版本，只有它自己知道。
 	 * 缺失（老数据或新建的浏览器）表示「这个浏览器上还没装过脚本」，首次启动会安装一遍。
 	 */
 	userscriptVersions?: Record<string, string>;
-	/** 远程 API 元数据，仅远程创建的实例会有 */
+	/** [ocs-ext] 远程 API 元数据，仅远程创建的实例会有 */
 	remoteMeta?: BrowserRemoteMeta;
 }
 

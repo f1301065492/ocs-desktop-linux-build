@@ -2,7 +2,7 @@ import path from 'path';
 import axios from 'axios';
 import { createWriteStream, existsSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { finished } from 'stream/promises';
-import { Logger } from '../logger';
+import { Logger } from '../../logger';
 
 const logger = Logger('download');
 

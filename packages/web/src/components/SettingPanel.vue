@@ -140,13 +140,8 @@
 			</Description>
 		</a-card>
 
-		<RemoteApiSetting />
-
-		<UpdateSourceSetting />
-
-		<DshBridgeSetting />
-
-		<SshTunnelSetting />
+		<!-- [ocs-ext] 扩展功能设置卡片（远程 API / 更新源 / DSH / SSH 隧道） -->
+		<ExtSettingsCards />
 
 		<a-card title="路径设置">
 			<Path
@@ -188,10 +183,8 @@ import Path from './Path.vue';
 import { lang, store } from '../store';
 import { remote } from '../utils/remote';
 import BrowserPath from './setting/BrowserPath.vue';
-import RemoteApiSetting from './setting/RemoteApiSetting.vue';
-import UpdateSourceSetting from './setting/UpdateSourceSetting.vue';
-import DshBridgeSetting from './setting/DshBridgeSetting.vue';
-import SshTunnelSetting from './setting/SshTunnelSetting.vue';
+// [ocs-ext]
+import ExtSettingsCards from '../ext/settings/ExtSettingsCards.vue';
 import OCSConfigs from './OCSConfigs.vue';
 import { reactive } from 'vue';
 import { changeTheme } from '../utils';

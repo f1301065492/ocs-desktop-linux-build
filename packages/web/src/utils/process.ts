@@ -11,7 +11,7 @@ import { child_process } from './node';
 import { notify } from './notify';
 import { Status } from './statusBar';
 import { filterScriptsNeedingInstall } from './script-version';
-import { notifyRealtime } from './dsh-notify';
+import { notifyRealtime } from '../ext/dsh/notify'; // [ocs-ext] 主动通知实时上报
 
 export type RemoteScriptWorker = <W extends keyof ScriptWorker = keyof ScriptWorker>(
 	event: W,
@@ -148,6 +148,7 @@ export class Process extends EventEmitter {
 			},
 			config: {
 				enable_dialog: store.render.setting.browser.enableDialog,
+				// [ocs-ext] 启动前清除登录状态
 				clear_login_on_launch: store.render.setting.browser.clearLoginOnLaunch
 			},
 			langs: store.render.langs as any

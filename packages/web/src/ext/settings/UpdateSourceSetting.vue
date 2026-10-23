@@ -44,7 +44,7 @@
 <script setup lang="ts">
 import { onMounted, reactive } from 'vue';
 import { Message } from '@arco-design/web-vue';
-import Description from '../Description.vue';
+import Description from '../../components/Description.vue';
 import { remote } from '../../utils/remote';
 
 const state = reactive({

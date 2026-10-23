@@ -11,9 +11,7 @@ import { startupServer } from './src/tasks/startup.server';
 import { initChrome } from './src/tasks/init.chrome';
 import { store } from './src/store';
 import { initAesKey } from './src/crypto';
-import { startRemoteApi } from './src/tasks/remote.api';
-import { startTunnel, stopTunnel } from './src/tasks/ssh.tunnel';
-import { Logger } from './src/logger';
+import { startExtServices, shutdownExt } from './src/ext/boot';
 
 app.setName('ocs');
 
@@ -45,20 +43,8 @@ function bootstrap() {
 				task('初始化本地设置', async () => {
 					initStore();
 					await task('启动接口服务', () => startupServer());
-					// 远程 API 是可选能力：端口被占用、密钥未配置等都只应记录状态，
-					// 绝不能让它把整个启动流程拖垮（task 会把异常一路抛到 Promise.all）
-					try {
-						await task('启动远程 API', () => startRemoteApi());
-					} catch (err) {
-						Logger('bootstrap').error('远程 API 启动失败：', String(err));
-					}
-					// SSH 隧道同样是可选能力：配置不全或指纹未确认时只更新状态，不抛异常。
-					// startTunnel 内部已经兜住了错误，这里再包一层是防它把 bootstrap 拖垮
-					try {
-						await task('启动 SSH 隧道', () => startTunnel());
-					} catch (err) {
-						Logger('bootstrap').error('SSH 隧道启动失败：', String(err));
-					}
+					// 扩展能力（远程 API / SSH 隧道）：失败只记日志，不影响主流程
+					await task('启动扩展服务', () => startExtServices());
 				})
 			),
 			task('初始化自动启动', () => autoLaunch()),
@@ -117,18 +103,6 @@ function bootstrap() {
 	);
 }
 
-/**
- * 退出时清理 SSH 隧道进程。
- *
- * 必须挂两个钩子，缺一不可：
- * - `before-quit` 覆盖正常的退出路径；
- * - `process.on('exit')` 是兜底。因为上面 `app.on('quit')` 拦截退出后，
- *   渲染层最终调用的是 `remote.app.call('exit', 0)`，而 **`app.exit()` 明确不会触发
- *   `before-quit` / `will-quit`** —— 只挂前者等于清理不执行，隧道会留在系统里，
- *   表现为「软件关了但端口还在转发」。
- *
- * `process.on('exit')` 里不允许异步操作，`stopTunnel()` 正是同步实现（只做 child.kill）。
- * 两个钩子都调用同一个函数，重复调用是安全的。
- */
-app.on('before-quit', () => stopTunnel());
-process.on('exit', () => stopTunnel());
+/** 退出时清理扩展进程（SSH 隧道），双钩子缺一不可，细节见 ext/boot.ts */
+app.on('before-quit', () => shutdownExt());
+process.on('exit', () => shutdownExt());

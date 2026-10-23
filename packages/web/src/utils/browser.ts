@@ -72,7 +72,7 @@ export function newFolder() {
 	currentFolder.value.children[id] = folder;
 }
 /**
- * 新建浏览器（唯一工厂）。
+ * [ocs-ext] 新建浏览器（唯一工厂）。
  *
  * 新增的可选参数全部服务于远程 API，不传时行为与改造前完全一致：
  * - parentUid：目标文件夹。**远程调用必须显式传**，因为缺省值 currentFolder.value

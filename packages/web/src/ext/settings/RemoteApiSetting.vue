@@ -171,10 +171,10 @@
 <script setup lang="ts">
 import { onMounted, reactive } from 'vue';
 import { Message } from '@arco-design/web-vue';
-import Description from '../Description.vue';
-import Icon from '../Icon.vue';
+import Description from '../../components/Description.vue';
+import Icon from '../../components/Icon.vue';
 import { remote } from '../../utils/remote';
-import { remoteApiState } from './remote-api.state';
+import { remoteApiState } from '../remote-api/state';
 
 interface RemoteApiStatus {
 	enabled: boolean;

@@ -2,10 +2,10 @@ import { app } from 'electron';
 import axios from 'axios';
 import { gt } from 'semver';
 import { UpdateInformationResource } from '@ocs-desktop/common';
-import { Logger } from '../logger';
-import { store } from '../store';
-import { releaseFromManifest } from './update.manifest';
-import type { MirrorAssetManifest, NormalizedRelease, ReleaseAsset } from './update.manifest';
+import { Logger } from '../../logger';
+import { store } from '../../store';
+import { releaseFromManifest } from './manifest';
+import type { MirrorAssetManifest, NormalizedRelease, ReleaseAsset } from './manifest';
 
 const logger = Logger('updater');
 

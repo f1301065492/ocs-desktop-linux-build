@@ -1,13 +1,13 @@
 import { watch } from 'vue';
-import { electron, inBrowser } from './node';
-import { remote } from './remote';
-import { store } from '../store';
-import { root, Folder } from '../fs/folder';
-import { Browser } from '../fs/browser';
-import { Process, processes } from './process';
-import { newBrowser } from './browser';
-import { persistBrowserTree } from './persist';
-import { RawAutomationScript } from '../components/automation-scripts';
+import { electron, inBrowser } from '../../utils/node';
+import { remote } from '../../utils/remote';
+import { store } from '../../store';
+import { root, Folder } from '../../fs/folder';
+import { Browser } from '../../fs/browser';
+import { Process, processes } from '../../utils/process';
+import { newBrowser } from '../../utils/browser';
+import { persistBrowserTree } from '../persist';
+import { RawAutomationScript } from '../../components/automation-scripts';
 
 const { ipcRenderer } = electron;
 

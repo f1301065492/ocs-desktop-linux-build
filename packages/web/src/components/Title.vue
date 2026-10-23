@@ -83,11 +83,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref } from 'vue';
+import { computed, h } from 'vue';
 import { fetchRemoteNotify, date, about, getRemoteInfos } from '../utils';
 import { remote } from '../utils/remote';
 import TitleLink from './TitleLink.vue';
-import { Message, Modal, InputPassword } from '@arco-design/web-vue';
+import { Message, Modal } from '@arco-design/web-vue';
+// [ocs-ext] 数据导出/导入的可移植格式
+import { decryptImportedRender, askExportPassword, encryptRenderForExport } from '../ext/portable';
 import { store } from '../store/index';
 import { router } from '../route';
 import { electron } from '../utils/node';
@@ -131,48 +133,6 @@ function allNotify() {
 	fetchRemoteNotify(true);
 }
 
-/** 可移植数据格式前缀（与主进程 crypto.ts 保持一致） */
-const PORTABLE_PREFIX = 'ocsdata:v2:';
-
-/** 弹窗输入密码；取消返回 null */
-function askPassword(title: string, tip: string): Promise<string | null> {
-	return new Promise((resolve) => {
-		let settled = false;
-		const password = ref('');
-		const finish = (value: string | null) => {
-			if (settled) return;
-			settled = true;
-			resolve(value);
-		};
-		Modal.open({
-			title,
-			content: () =>
-				h('div', [
-					h('div', { style: 'margin-bottom: 8px; color: var(--color-text-3); font-size: 12px;' }, tip),
-					h(InputPassword, {
-						modelValue: password.value,
-						placeholder: '至少 4 个字符',
-						'onUpdate:modelValue': (value: string) => {
-							password.value = value;
-						}
-					})
-				]),
-			okText: '确定',
-			cancelText: '取消',
-			onOk: () => {
-				if (password.value.trim().length < 4) {
-					Message.warning('密码至少 4 个字符');
-					return false;
-				}
-				finish(password.value);
-				return true;
-			},
-			onCancel: () => finish(null),
-			onClose: () => finish(null)
-		});
-	});
-}
-
 function importData() {
 	remote.dialog
 		.call('showOpenDialog', {
@@ -186,38 +146,13 @@ function importData() {
 					const text = await remote.fs.call('readFileSync', filePaths[0], { encoding: 'utf8' });
 					const _store: typeof store = JSON.parse(text.toString());
 
-					// 如果 render 是加密字符串，先解密为明文再导入
+					// [ocs-ext] 如果 render 是加密字符串，先解密为明文再导入（可移植格式 / 旧本机格式）
 					if (typeof _store.render === 'string') {
-						const renderStr = _store.render as string;
-						if (renderStr.startsWith(PORTABLE_PREFIX)) {
-							// 可移植格式：用导出时设置的密码解密
-							const password = await askPassword('输入导出密码', '这份数据是用密码加密的，请输入导出时设置的密码。');
-							if (!password) {
-								Message.warning('已取消导入');
-								return;
-							}
-							try {
-								const data = JSON.parse(
-									remote.methods.callSync('decryptPortable' as any, renderStr, password) as string
-								);
-								(_store as any).render = data;
-							} catch {
-								Message.error('密码错误或数据已损坏，无法解密');
-								return;
-							}
-						} else {
-							// 旧格式：用本机密钥链的 AES 密钥解密，只能在同一台机器/同一用户下使用
-							try {
-								const data = JSON.parse(remote.methods.callSync('decryptRenderString' as any, renderStr) as string);
-								(_store as any).render = data;
-							} catch {
-								Message.error(
-									'这份数据是用导出电脑的本地密钥加密的，当前电脑无法解密。' +
-										'请在原电脑升级到新版后重新导出（会提示设置密码），再到这里导入。'
-								);
-								return;
-							}
+						const data = await decryptImportedRender(_store.render as string);
+						if (!data) {
+							return;
 						}
+						(_store as any).render = data;
 					}
 
 					const root = _store.render.browser.root;
@@ -278,7 +213,7 @@ function exportData() {
 		okText: '确认',
 		cancelText: '取消',
 		onOk: async () => {
-			const password = await askPassword('设置导出密码', '换电脑导入时需要输入这个密码；请妥善保存，忘记后无法恢复。');
+			const password = await askExportPassword();
 			if (!password) {
 				return;
 			}
@@ -313,13 +248,9 @@ function exportData() {
 							}
 						}
 
-						// 导出前用密码加密 render 数据：跨机器可解，同时避免明文泄露
+						// [ocs-ext] 导出前用密码加密 render 数据：跨机器可解，同时避免明文泄露
 						if (typeof _store.render !== 'string') {
-							(_store as any).render = remote.methods.callSync(
-								'encryptPortable' as any,
-								JSON.stringify(_store.render),
-								password
-							) as string;
+							(_store as any).render = encryptRenderForExport(_store.render, password);
 						}
 
 						// 删除多余数据

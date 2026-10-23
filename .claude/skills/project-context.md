@@ -85,7 +85,8 @@ packages/app/src/
 │   ├── global.listener.ts # 全局事件监听
 │   ├── auto.launch.ts     # 开机自启
 │   ├── error.handler.ts   # 全局错误处理
-│   └── updater.ts         # 应用自动更新
+│   └── updater.ts         # 应用自动更新（本分支已改为 ext/update 的薄壳）
+├── ext/                   # ★ 本分支新增功能：远程 API / DSH / SSH 隧道 / 更新源（见仓库根 FORK.md）
 ├── workflows/presets/     # 工作流预设（预留）
 └── scripts/copy-bundled.js # 构建后脚本：复制 .js bundled 文件到 lib/
 ```
@@ -115,6 +116,7 @@ packages/web/src/
 │   ├── dashboard/         # 监控列表页
 │   ├── setting/           # 软件设置页
 │   └── bookmarks.vue      # 书签导航页（浏览器首页）
+├── ext/                   # ★ 本分支新增功能：设置页扩展卡片 / 远程 API worker / 持久化 / 可移植导入导出（见 FORK.md）
 ├── components/
 │   ├── automation-scripts/ # 自动化脚本相关组件
 │   │   ├── index.ts       # 类型导出 + 工具函数
@@ -596,7 +598,7 @@ app.whenReady()
 
 | 需求                   | 位置                                                                                                            |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 新增 IPC 方法          | [remote.register.ts: methods](packages/app/src/tasks/remote.register.ts)                                        |
+| 新增 IPC 方法          | [ext/ipc.ts](packages/app/src/ext/ipc.ts)（展开进 remote.register 的 `...EXT_METHODS`）                      |
 | 新增内置自动化脚本     | [bundled/](packages/app/src/scripts/automation/bundled/)                                                        |
 | 修改浏览器实体         | [browser.ts](packages/web/src/fs/browser.ts)                                                                    |
 | 修改文件树结构         | [folder.ts](packages/web/src/fs/folder.ts)                                                                      |
@@ -607,5 +609,7 @@ app.whenReady()
 | 修改本地服务路由       | [startup.server.ts](packages/app/src/tasks/startup.server.ts)                                                   |
 | 修改脚本沙盒权限       | [sandbox.ts](packages/app/src/scripts/sandbox.ts)                                                               |
 | 修改浏览器启动流程     | [worker/index.ts](packages/app/src/worker/index.ts)                                                             |
+| 修改应用更新逻辑       | [ext/update/updater.ts](packages/app/src/ext/update/updater.ts)                                                 |
+| 同步上游 / 看扩展边界  | [FORK.md](FORK.md)                                                                                              |
 | 修改 Electron 打包配置 | [electron.builder.json](packages/app/electron.builder.json)                                                     |
 | 修改 Vite 构建         | [vite.config.ts](packages/web/vite.config.ts)                                                                   |

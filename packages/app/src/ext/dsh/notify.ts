@@ -5,8 +5,8 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { app } from 'electron';
-import { Logger } from '../logger';
-import { bundledBridgeDir } from './dsh.bridge';
+import { Logger } from '../../logger';
+import { bundledBridgeDir } from './bridge';
 
 /**
  * 主动通知（OCS → DSH）。

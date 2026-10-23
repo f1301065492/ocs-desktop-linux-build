@@ -66,8 +66,10 @@ import { electron } from './utils/node';
 import { closeAllBrowser, showClearBrowserCachesModal } from './utils/browser';
 import { about, changeTheme, fetchRemoteNotify, fetchRemoteLangs, setAlwaysOnTop, setAutoLaunch } from './utils';
 import { activeIpcRenderListener } from './utils/ipc';
-import { saveStoreToLocal, saveStoreToLocalSync } from './utils/persist';
-import { startRemoteApiWorker } from './utils/remote.api';
+// [ocs-ext] 扩展能力：持久化 / 远程 API worker / 主动通知自启动
+import { saveStoreToLocal, saveStoreToLocalSync } from './ext/persist';
+import { startRemoteApiWorker } from './ext/remote-api/worker';
+import { startDshNotifyIfEnabled } from './ext/dsh/autostart';
 import { getWindowsRelease } from './utils/os';
 import { currentBrowser } from './fs';
 import { Modal, Message } from '@arco-design/web-vue';
@@ -81,34 +83,11 @@ import Setup from './components/Setup.vue';
 
 const { ipcRenderer } = electron;
 
-/** 主动通知：配置存在且启用时，随应用启动拉起 watcher（失败只记日志，不打扰用户） */
-async function startDshNotifyIfEnabled() {
-	const cfg = store.render.setting.dshNotify;
-	if (!cfg?.enabled || !cfg.botId || !cfg.targetId || !cfg.apiKey) {
-		return;
-	}
-	try {
-		const status = await remote.methods.call('dshBridgeStatus');
-		const port = status?.remoteApi?.port || 15320;
-		await remote.methods.call('dshNotifyStart', {
-			ocsBase: `https://127.0.0.1:${port}`,
-			apiKey: cfg.apiKey,
-			certFingerprint: status?.remoteApi?.certFingerprint || '',
-			botId: cfg.botId,
-			targetId: cfg.targetId,
-			deliveryUrl: cfg.deliveryUrl || undefined,
-			intervalSec: cfg.intervalSec
-		});
-	} catch (err) {
-		remote.logger.call('warn', 'DSH 通知自动启动失败：' + String(err)).catch(() => {});
-	}
-}
-
 onMounted(async () => {
 	/** 开启 Ipc 通道监听 */
 	activeIpcRenderListener();
 
-	/** 启动远程 API 的 lease worker（长轮询拉取主进程派发的任务） */
+	/** [ocs-ext] 启动远程 API 的 lease worker（长轮询拉取主进程派发的任务） */
 	startRemoteApiWorker();
 
 	/** 设置窗口边框 */
@@ -130,7 +109,7 @@ onMounted(async () => {
 	setAlwaysOnTop();
 	changeTheme().catch(console.error);
 
-	/** 若在设置里开启了主动通知（DSH），随应用启动拉起 ocs-watch */
+	/** [ocs-ext] 若在设置里开启了主动通知（DSH），随应用启动拉起 ocs-watch */
 	startDshNotifyIfEnabled();
 
 	/** 打开关于软件 */
