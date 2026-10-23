@@ -39,7 +39,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 优先用带写权限的 PAT（secret: UPSTREAM_SYNC_TOKEN）；没有则用内置令牌。
+      # 内置令牌需要在仓库 Settings → Actions → General → Workflow permissions
+      # 设为 “Read and write”，否则无法推送 / 建 issue / 建 PR。
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
       MODE: ${{ github.event.inputs.mode || 'direct' }}
       UPSTREAM_REPO: https://github.com/ocsjs/ocs-desktop.git
     steps:
@@ -48,6 +51,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -107,12 +111,20 @@ jobs:
             echo
             echo "处理方式见仓库根目录 \`FORK.md\` 第四节：以上游新版本为基线搬运 \`ext/\`，再重落 \`[ocs-ext]\` 钩子。"
           } > "$RUNNER_TEMP/issue.md"
-          num=$(gh issue list --state open --search '上游更新需要手动合并 in:title' --json number -q '.[0].number')
+          num=$(gh issue list --state open --search '上游更新需要手动合并 in:title' --json number -q '.[0].number' || true)
           if [ -n "$num" ]; then
-            gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md"
+            gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md" || \
+              echo "::warning::无法评论 issue（令牌无写权限），冲突信息见运行摘要"
           else
-            gh issue create --title "上游更新需要手动合并（${UPSTREAM_SHORT}）" --body-file "$RUNNER_TEMP/issue.md"
+            gh issue create --title "上游更新需要手动合并（${UPSTREAM_SHORT}）" --body-file "$RUNNER_TEMP/issue.md" || \
+              echo "::warning::无法创建 issue（令牌无写权限），冲突信息见运行摘要"
           fi
+          # 冲突信息同时写进运行摘要，令牌只读时也能看到
+          {
+            echo "### ⚠️ 上游合并冲突"
+            echo
+            cat "$RUNNER_TEMP/issue.md"
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
       - name: Install pnpm
@@ -158,12 +170,19 @@ jobs:
             echo
             echo "请在本机执行 \`git merge upstream/main\` 后按 \`FORK.md\` 排查。"
           } > "$RUNNER_TEMP/issue.md"
-          num=$(gh issue list --state open --search '上游更新检查未通过 in:title' --json number -q '.[0].number')
+          num=$(gh issue list --state open --search '上游更新检查未通过 in:title' --json number -q '.[0].number' || true)
           if [ -n "$num" ]; then
-            gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md"
+            gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md" || \
+              echo "::warning::无法评论 issue（令牌无写权限），失败信息见运行摘要"
           else
-            gh issue create --title "上游更新检查未通过（${UPSTREAM_SHORT}）" --body-file "$RUNNER_TEMP/issue.md"
+            gh issue create --title "上游更新检查未通过（${UPSTREAM_SHORT}）" --body-file "$RUNNER_TEMP/issue.md" || \
+              echo "::warning::无法创建 issue（令牌无写权限），失败信息见运行摘要"
           fi
+          {
+            echo "### ⚠️ 上游更新检查未通过"
+            echo
+            cat "$RUNNER_TEMP/issue.md"
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
       - name: Push to main
@@ -202,7 +221,7 @@ jobs:
           gh pr merge "$num" --merge --auto || echo "自动合并未启用，请手动以 merge commit 合并"
 
       - name: Summary
-        if: steps.check.outputs.need == 'true'
+        if: always() && steps.check.outputs.need == 'true'
         run: |
           {
             echo "### 上游同步"

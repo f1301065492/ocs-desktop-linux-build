@@ -125,6 +125,11 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 - Actions 用 `GITHUB_TOKEN` 推送不会触发其它 workflow（GitHub 的限制），所以检查是在
   `upstream-sync` 任务里自己跑的；不要把它简化成“只开 PR、等 CI”。
 - `main` 若有分支保护、不允许 Actions 直接 push，任务会自动回退成 PR 模式。
+- **令牌要求**（二选一）：
+  1. 仓库 Settings → Actions → General → Workflow permissions 设为 **Read and write**；
+  2. 或添加 Actions secret `UPSTREAM_SYNC_TOKEN`（fine-grained PAT，给 Contents / Issues / Pull requests 读写）。
+  两者都没有时，任务仍会检查并尝试合并，但无法推送/建 issue；冲突和失败信息会写进该次
+  Actions 运行的 **Summary**，运行本身标记为失败。
 - **第一次同步（2.13 → 3.x）跨度很大**：上游把构建链迁到了 electron-vite、类型下沉到 common、
   重做了界面与加密，实测有 30 处冲突，必然走“手动合并”路径；按第五节处理完这一次以后，
   后续小版本更新才能稳定自动合并。
