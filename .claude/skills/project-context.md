@@ -1,5 +1,10 @@
 # OCS Desktop — 项目技能文档
 
+> ⚠️ **2026-10-24 已同步上游 3.x（v3.1.0）**：构建链改为 **electron-vite**（主进程/渲染进程产物在
+> `packages/app/out/`，打包输出仓库根 `releases/`），跨进程类型契约下沉到 `@ocs-desktop/common`，
+> 自动更新改为 electron-updater。本文档中与构建/打包/类型位置相关的旧描述以仓库根
+> `package.json`、`FORK.md` 与 `packages/common/src/contract.ts` 为准。
+
 > 本文档面向 AI 助手阅读，提供项目全貌、架构规范、核心机制和开发约定，便于后续 AI 辅助开发时快速理解项目上下文。
 
 ---

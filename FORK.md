@@ -4,7 +4,7 @@
 为了让后续合并上游更新时冲突面尽量小，**所有新增功能都放在独立的 `ext/` 目录里**，
 上游文件只保留少量带 `[ocs-ext]` 标记的钩子行。
 
-> 基线：`4d3e596`（上游 v2.13.0 的快照 + Linux 构建工作流）。
+> 当前已同步到上游 `6ca8a45`（v3.1.0，2026-10-23）。最初的快照基线是 `4d3e596`（v2.13.0）。
 > 查当前所有钩子：`git grep -n "\[ocs-ext\]"`。
 
 ---
@@ -23,11 +23,10 @@ packages/app/src/ext/            主进程扩展（新增功能全部在这里�
 ├── remote-api/                  远程 HTTPS API（15 条路由、鉴权、TLS、任务、SSE）
 ├── dsh/                         DSH 接入：bridge / IM 补丁 / 主动通知
 ├── ssh/                         SSH 反向隧道
-└── update/                      更新源、镜像清单解析、跨平台更新、分片下载
+└── update/source.ts             更新源配置（映射到 electron-updater 的 feedUrl）
 
 packages/web/src/ext/            渲染进程扩展
 ├── persist.ts                   store 持久化（单次 IPC 加密 + 写入）
-├── portable.ts                  导出/导入的口令交互
 ├── dsh/{notify,autostart,store}.ts
 ├── remote-api/{worker,state}.ts
 └── settings/                    设置页卡片（ExtSettingsCards 一次挂载四张；另含登录状态开关）
@@ -52,8 +51,8 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 | 飞书 `/ocs` 命令补丁 | `ext/dsh/im.ts` | `ext/settings/DshBridgeSetting.vue` | `tools/dsh-ocs-command/` |
 | 主动通知（实时 + 轮询） | `ext/dsh/notify.ts` | `ext/dsh/notify.ts`、`ext/dsh/autostart.ts`、`ext/settings/DshBridgeSetting.vue` | `tools/ocs-openclaw/ocs-watch.mjs` |
 | SSH 反向隧道 | `ext/ssh/tunnel.ts`、`ext/ipc.ts` | `ext/settings/SshTunnelSetting.vue` | — |
-| 自建更新源 / 跨平台更新 | `ext/update/{source,manifest,updater,download}.ts` | `ext/settings/UpdateSourceSetting.vue` | `tools/update-mirror/` |
-| 数据导出/导入（可移植格式） | `ext/portable.ts`、`ext/ipc.ts` | `ext/portable.ts` | — |
+| 自建更新源 | `ext/update/source.ts`（映射 feedUrl）、`ext/ipc.ts` | `ext/settings/UpdateSourceSetting.vue` | `tools/update-mirror/` |
+| 数据导出/导入（旧版可移植格式） | `ext/portable.ts`、`ext/ipc.ts` | `Title.vue` 的 `ocsdata:v2` 兼容分支 | — |
 | 页面内「需要人工」通知 | `ext/page-notify.ts` | — | — |
 | 启动前清除登录状态 | `ext/login-state.ts` | `ext/settings/ClearLoginOnLaunchSetting.vue` | — |
 | store 持久化 | — | `ext/persist.ts` | — |
@@ -69,32 +68,33 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 | `packages/app/index.ts` | `startExtServices`、`shutdownExt`、`[ocs-ext]` |
 | `packages/app/src/store.ts` | `...EXT_APP_STORE_DEFAULTS` |
 | `packages/app/src/tasks/remote.register.ts` | `...EXT_METHODS`、`protectMainProcessOwnedKeys`、`attachExtIpc` |
-| `packages/app/src/utils/index.ts` | `export { downloadFile } from '../ext/update/download'` |
-| `packages/app/src/crypto.ts` | 仅延迟 logger（可移植加密已移到 `ext/portable.ts`） |
+| `packages/app/src/tasks/updater.ts` | `getUpdateSourceConfig`（镜像作为 generic feedUrl） |
+| `packages/app/src/worker/entry.ts` | `unhandledRejection` 兜底 |
+| `packages/common/src/contract.ts` | `clear_login_on_launch` |
 | `packages/app/src/worker/index.ts` | `listPagesExt`、`screenshotPageExt`、`clearLoginState`、`PAGE_NOTIFY_SCRIPT`、`installPageNotifier` |
-| `packages/web/src/App.vue` | `ext/persist`、`startRemoteApiWorker`、`startDshNotifyIfEnabled` |
+| `packages/web/src/App.vue` | `startRemoteApiWorker`、`startDshNotifyIfEnabled` |
 | `packages/web/src/components/SettingPanel.vue` | `<ExtSettingsCards />`、`<ClearLoginOnLaunchSetting />` |
-| `packages/web/src/components/Title.vue` | `decryptImportedRender`、`askExportPassword`、`encryptRenderForExport` |
-| `packages/web/src/store/index.ts` | `DEFAULT_DSH_NOTIFY`、`migrateDshNotify`、`clearLoginOnLaunch`、`dshNotify` 类型 |
+| `packages/web/src/components/Title.vue` | `ocsdata:v2` 旧格式导入兼容 |
+| `packages/web/src/store/index.ts` | `DEFAULT_DSH_NOTIFY`、`clearLoginOnLaunch`、`dshNotify` 类型 |
+| `packages/web/src/utils/remote.ts` | methods 键类型放宽（扩展 IPC 不在 common 契约内） |
 | `packages/web/src/fs/interface.ts` | `BrowserRemoteMeta`、`userscriptVersions`、`remoteMeta` |
 | `packages/web/src/fs/browser.ts` | `userscriptVersions`、`remoteMeta`、启动并发防护 |
-| `packages/web/src/utils/process.ts` | `notifyRealtime`、`clear_login_on_launch`、`appendLogs` |
+| `packages/web/src/utils/process.ts` | `notifyRealtime`、`clear_login_on_launch`、`appendLog` 实时上报、前置检查抛错 |
 | `packages/web/src/utils/browser.ts` | `newBrowser` 的 `parentUid / uid / silent / remoteMeta` 选项 |
-| `packages/web/src/utils/script-version.ts` | 按浏览器取已安装版本；远端无 `meta.js` 时回退正文解析 |
+| `packages/web/src/utils/script-version.ts` | 按浏览器取已安装版本 |
 
 ### 被整体替换 / 大改的上游文件
 
 | 文件 | 说明 |
 | --- | --- |
-| `packages/app/src/tasks/updater.ts` | 只剩一行 `export { updater, updateApp } from '../ext/update/updater'`；实现按平台分流并支持自建更新源 |
-| `packages/app/src/tasks/startup.server.ts` | 安全修复：CORS 收紧到本机白名单、只绑定 `127.0.0.1`、预检拒绝非白名单来源 |
-| `packages/app/script.js` | 子进程 `unhandledRejection` 兜底（防止浏览器进程被未捕获异常杀掉） |
+| `packages/app/src/tasks/updater.ts` | 上游 electron-updater 实现；仅加一处 `getUpdateSourceConfig()`，把自建镜像映射成 generic feedUrl |
+| `packages/app/src/tasks/startup.server.ts` | 在上游 auth-token / 回环绑定基础上，保留本分支的 CORS 本机白名单 |
+| `packages/app/src/worker/entry.ts` | 子进程 `unhandledRejection` 兜底（防止浏览器进程被未捕获异常杀掉） |
 | `packages/app/src/worker/index.ts` | 除钩子外还有 `waitAndCloseExtensionHomepage` 不抛异常化（线上崩溃修复） |
-| `packages/web/src/utils/process.ts` | 除钩子外还有启动前置检查抛错、关闭超时、日志缓冲上限等生命周期修复 |
+| `packages/web/src/utils/process.ts` | 除钩子外还有启动前置检查抛错、关闭超时等生命周期修复 |
 | `packages/web/src/fs/entity.ts` | `uuid()` 优先 `crypto.randomUUID()` |
 | `packages/web/src/components/browsers/*` | `launch().catch()`，避免前置检查失败产生未捕获 rejection |
-| `packages/app/src/scripts/automation/wk/*.ts` | 智慧树等登录脚本按线上改版重写 |
-| `packages/app/types.ts` | `lastInstalledVersion` 标记为废弃（改按浏览器记录） |
+| `packages/app/src/scripts/automation/wk/*.ts` | 已采用上游 3.x 的登录脚本实现 |
 
 ### 构建 / 发版相关（与上游功能无关）
 
@@ -134,9 +134,9 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 - 细粒度 PAT 对部分 GraphQL 写操作会返回 `Resource not accessible by personal access token`，
   所以工作流**建 issue、评论、建 PR 都走 REST 接口**（`gh api`），不要改回 `gh issue create` /
   `gh pr create`。
-- **第一次同步（2.13 → 3.x）跨度很大**：上游把构建链迁到了 electron-vite、类型下沉到 common、
-  重做了界面与加密，实测有 30 处冲突，必然走“手动合并”路径；按第五节处理完这一次以后，
-  后续小版本更新才能稳定自动合并。
+- **第一次同步已完成**（2026-10-24）：从 2.13 快照跨到上游 `6ca8a45`（v3.1.0），
+  当时有 101 个上游提交、30 处冲突，按第五节手动处理完毕。之后每日任务只处理增量，
+  冲突面会小得多；再遇到大重构仍需手动。
 
 
 ## 五、手动同步上游（自动合并失败时）
