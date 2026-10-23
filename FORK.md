@@ -30,7 +30,7 @@ packages/web/src/ext/            渲染进程扩展
 ├── portable.ts                  导出/导入的口令交互
 ├── dsh/{notify,autostart,store}.ts
 ├── remote-api/{worker,state}.ts
-└── settings/                    设置页卡片（ExtSettingsCards 一次挂载四张）
+└── settings/                    设置页卡片（ExtSettingsCards 一次挂载四张；另含登录状态开关）
 
 tools/ocs-openclaw/              聊天助手桥接（MCP / 通知 watcher / 自检 / 测试）
 tools/dsh-ocs-command/           DSH `/ocs` 命令插件
@@ -55,7 +55,7 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 | 自建更新源 / 跨平台更新 | `ext/update/{source,manifest,updater,download}.ts` | `ext/settings/UpdateSourceSetting.vue` | `tools/update-mirror/` |
 | 数据导出/导入（可移植格式） | `ext/portable.ts`、`ext/ipc.ts` | `ext/portable.ts` | — |
 | 页面内「需要人工」通知 | `ext/page-notify.ts` | — | — |
-| 启动前清除登录状态 | `ext/login-state.ts` | `SettingPanel.vue` 的开关 | — |
+| 启动前清除登录状态 | `ext/login-state.ts` | `ext/settings/ClearLoginOnLaunchSetting.vue` | — |
 | store 持久化 | — | `ext/persist.ts` | — |
 
 ---
@@ -73,7 +73,7 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 | `packages/app/src/crypto.ts` | 仅延迟 logger（可移植加密已移到 `ext/portable.ts`） |
 | `packages/app/src/worker/index.ts` | `listPagesExt`、`screenshotPageExt`、`clearLoginState`、`PAGE_NOTIFY_SCRIPT`、`installPageNotifier` |
 | `packages/web/src/App.vue` | `ext/persist`、`startRemoteApiWorker`、`startDshNotifyIfEnabled` |
-| `packages/web/src/components/SettingPanel.vue` | `<ExtSettingsCards />` |
+| `packages/web/src/components/SettingPanel.vue` | `<ExtSettingsCards />`、`<ClearLoginOnLaunchSetting />` |
 | `packages/web/src/components/Title.vue` | `decryptImportedRender`、`askExportPassword`、`encryptRenderForExport` |
 | `packages/web/src/store/index.ts` | `DEFAULT_DSH_NOTIFY`、`migrateDshNotify`、`clearLoginOnLaunch`、`dshNotify` 类型 |
 | `packages/web/src/fs/interface.ts` | `BrowserRemoteMeta`、`userscriptVersions`、`remoteMeta` |
