@@ -932,11 +932,82 @@ function browserNetworkRoute(authToken: string, browser: BrowserContext) {
 	});
 }
 
+/**
+ * 页面内通知监听（注入到每个页面）。
+ *
+ * 用户脚本（如 OCS 网课助手）的「全部任务点已完成」「检测到验证码」这类提示
+ * 画在页面 DOM 里，不经过桌面端。这里监听新增的对话框/浮层，命中关键词就
+ * `console.log('[ocs-notify] …')`，由 page.on('console') 转发到 worker 日志，
+ * 从而进入主动通知链路。
+ */
+const PAGE_NOTIFY_SCRIPT = String.raw`
+(() => {
+  try {
+    if (window.__ocsNotifyHook) return;
+    window.__ocsNotifyHook = true;
+    var KEYWORDS = /任务点|章节|验证码|全部完成|已完成|自动化|脚本/;
+    var SELECTOR = '[role="dialog"],[class*="dialog"],[class*="modal"],'
+      + '[class*="message-box"],[class*="toast"],[class*="notice"],'
+      + '[class*="notification"]';
+    var lastText = new WeakMap();
+    function textOf(el) {
+      return String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+    function emit(el) {
+      if (!el || el.nodeType !== 1) return;
+      var text = textOf(el);
+      if (!text || text.length > 200 || !KEYWORDS.test(text)) return;
+      if (lastText.get(el) === text) return;
+      lastText.set(el, text);
+      try { console.log('[ocs-notify] ' + text); } catch (e) {}
+    }
+    function inspect(el) {
+      if (!el || el.nodeType !== 1) return;
+      if (el.matches && el.matches(SELECTOR)) {
+        emit(el);
+      } else {
+        // 非标准弹窗（自定义 class）：只对短文本 + 命中关键词的浮层做判断，避免扫描整页
+        var text = String(el.textContent || '');
+        if (text.length > 400 || !KEYWORDS.test(text)) return;
+        try {
+          var style = getComputedStyle(el);
+          if (style.position !== 'fixed' && style.position !== 'absolute' && !style.zIndex) return;
+        } catch (e) { return; }
+        emit(el);
+      }
+      if (el.querySelectorAll) {
+        var nodes = el.querySelectorAll(SELECTOR);
+        for (var i = 0; i < nodes.length; i += 1) emit(nodes[i]);
+      }
+    }
+    function start() {
+      inspect(document.body);
+      new MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i += 1) {
+          var record = records[i];
+          if (record.type === 'characterData') {
+            inspect(record.target.parentElement);
+            continue;
+          }
+          for (var j = 0; j < record.addedNodes.length; j += 1) inspect(record.addedNodes[j]);
+        }
+      }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', start, { once: true });
+    } else {
+      start();
+    }
+  } catch (e) {}
+})();
+`;
+
 function handleBrowserInit(browser: BrowserContext, config: { enable_dialog?: boolean; userDataDir: string }) {
 	// 防检测
 	browser.addInitScript({
 		content: 'Object.defineProperty(navigator, "webdriver", { get: () => false });console.log(navigator)'
 	});
+	browser.addInitScript({ content: PAGE_NOTIFY_SCRIPT });
 
 	// 关闭检测
 	const interval = setInterval(async () => {
@@ -955,6 +1026,16 @@ function handleBrowserInit(browser: BrowserContext, config: { enable_dialog?: bo
 	});
 
 	const pageHandle = (page: Page) => {
+		// 页面内通知：注入脚本把用户脚本弹窗以 [ocs-notify] 前缀打到 console，
+		// 这里转发到 worker 日志（渲染进程会再喂给实时通知/轮询）
+		page.on('console', (message) => {
+			const text = message.text();
+			const marker = '[ocs-notify] ';
+			if (text.startsWith(marker)) {
+				console.log(`[页面通知] ${text.slice(marker.length)}`);
+			}
+		});
+
 		// 按照文档的说法，如果不进行任何处理，则动作会和原版浏览器一致
 		// 如果不进行监听 page.on('dialog') playwright 会自动处理弹窗
 		page.on('dialog', async (dialog) => {

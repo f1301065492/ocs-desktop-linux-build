@@ -296,6 +296,11 @@ console.log('\n=== ocs-watch（推送）===');
 	checkMatch('日志里的 ANSI 转义会被清理', ansiRun, /错误：红色日志/);
 	check('输出不含 ANSI 转义', /\u001b\[/.test(ansiRun), false);
 
+	// 页面内弹窗（用户脚本画的）会由 worker 以 [页面通知] 前缀写进日志
+	mock.appendLog(UID, '[页面通知] 全部任务点已完成!\n');
+	const pageNotifyRun = await runWatch(env, stateFile);
+	checkMatch('页面内弹窗会进入播报', pageNotifyRun, /全部任务点已完成/);
+
 	// --deliver parent：把结构化通知交给父进程（OCS 主进程）统一去重/投递
 	mock.appendLog(UID, '超星：检测到验证码，需要人工处理\n');
 	const parentRun = await runWatchDetailed(env, stateFile, ['--deliver', 'parent']);
