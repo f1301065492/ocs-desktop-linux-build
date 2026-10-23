@@ -7,6 +7,7 @@ import { store } from '../store';
 import { getCurrentWebContents, moveWindowToTop } from '../utils';
 import { UpdateInformationResource, OCS_UPDATER, OCS_DOWNLOAD_PAGE, AppStore } from '@ocs-desktop/common';
 import { probeNetwork } from './net.status';
+import { getUpdateSourceConfig } from '../ext/update/source'; // [ocs-ext]
 
 const logger = Logger('updater');
 
@@ -136,9 +137,12 @@ function extractVersionSections(changelog: string, current: string, latest: stri
 /** 应用设置中的更新测试配置（自定义更新源 / 允许降级），正式用户默认留空不影响线上 */
 function applyUpdaterConfig() {
 	const config = store.store.updater;
-	if (config?.feedUrl) {
-		autoUpdater.setFeedURL({ provider: 'generic', url: config.feedUrl });
-		logger.info('使用自定义更新源', config.feedUrl);
+	// [ocs-ext] 设置页选择的「自建镜像」优先作为 generic 更新源
+	const extSource = getUpdateSourceConfig();
+	const feedUrl = extSource.source === 'mirror' ? extSource.mirrorBase : config?.feedUrl;
+	if (feedUrl) {
+		autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
+		logger.info('使用自定义更新源', feedUrl);
 	}
 	autoUpdater.allowDowngrade = config?.allowDowngrade === true;
 	if (autoUpdater.allowDowngrade) {

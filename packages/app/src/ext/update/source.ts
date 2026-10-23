@@ -30,15 +30,9 @@ export function getUpdateSourceConfig(): UpdateSourceConfig {
 	return normalize(raw);
 }
 
-/** 保存更新源，并同步给上游 electron-updater 的 feedUrl */
+/** 保存更新源配置（electron-updater 的 feedUrl 由 tasks/updater.ts 读取本配置后应用） */
 export function setUpdateSourceConfig(input: Partial<UpdateSourceConfig>): UpdateSourceConfig {
 	const cfg = normalize(input);
 	store.set('update', cfg);
-	// [ocs-ext] electron-updater 通过 store.updater.feedUrl 使用自定义源
-	const current = (store.store as Record<string, any>).updater || {};
-	store.set('updater', {
-		...current,
-		feedUrl: cfg.source === 'mirror' ? cfg.mirrorBase : ''
-	});
 	return cfg;
 }
