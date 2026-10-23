@@ -954,9 +954,34 @@ const PAGE_NOTIFY_SCRIPT = String.raw`
     function textOf(el) {
       return String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
     }
+    // 去掉弹窗自带的 UI 前缀/后缀（“弹窗来自：OCS 5.2.1 … 确定 ×”），
+    // 让同一条消息的不同组件形式归一成同一段文字
+    function cleanText(text) {
+      var value = String(text || '').replace(/\s+/g, ' ').trim();
+      value = value.replace(/^弹窗来自[:：]?\s*OCS\s*[\d.]+\s*/i, '');
+      value = value.replace(/^提示\s*/, '');
+      var changed = true;
+      while (changed) {
+        changed = false;
+        var next = value.replace(/\s*(?:×|✕|确定|取消|关闭|知道了|上一节|下一节|去学习)\s*$/, '').trim();
+        if (next !== value) {
+          value = next;
+          changed = true;
+        }
+      }
+      return value;
+    }
+    function isNested(el) {
+      var node = el.parentElement;
+      while (node) {
+        if (node.matches && node.matches(SELECTOR)) return true;
+        node = node.parentElement;
+      }
+      return false;
+    }
     function emit(el) {
-      if (!el || el.nodeType !== 1) return;
-      var text = textOf(el);
+      if (!el || el.nodeType !== 1 || isNested(el)) return;
+      var text = cleanText(textOf(el));
       if (!text || text.length > 200 || !KEYWORDS.test(text)) return;
       if (lastText.get(el) === text) return;
       lastText.set(el, text);

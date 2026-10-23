@@ -218,6 +218,31 @@ function cleanNotifyLine(line: string): string {
 	return text;
 }
 
+/** 去掉推送里的 UI 杂音并统一格式（同一消息的不同组件形式归一到同一文本） */
+function normalizeNotifyText(line: string): string {
+	let text = String(line || '')
+		.replace(ANSI_PATTERN, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+	text = text.replace(/^\[页面通知\]\s*/, '');
+	text = text.replace(/^弹窗来自[:：]?\s*OCS\s*[\d.]+\s*/i, '');
+	const wrapped = /^message success\s*\{\s*content:\s*(.*?)\s*\}$/i.exec(text);
+	if (wrapped) {
+		text = wrapped[1];
+	}
+	text = text.replace(/^提示\s*/, '');
+	let changed = true;
+	while (changed) {
+		changed = false;
+		const next = text.replace(/\s*(?:×|✕|确定|取消|关闭|知道了|上一节|下一节|去学习)\s*$/, '').trim();
+		if (next !== text) {
+			text = next;
+			changed = true;
+		}
+	}
+	return text;
+}
+
 /** 按内容挑一个图标，让推送更好扫读 */
 function lineIcon(line: string): string {
 	if (line.startsWith('状态：')) {
@@ -267,7 +292,7 @@ async function deliverEntries(entries: DshNotifyEntry[]): Promise<{ pushed: numb
 	const kept: DshNotifyEntry[] = [];
 	for (const entry of entries) {
 		const name = String(entry?.name || '').slice(0, 120);
-		const line = cleanNotifyLine(String(entry?.line || ''));
+		const line = normalizeNotifyText(cleanNotifyLine(String(entry?.line || '')));
 		if (!line || !shouldPush(name, line)) {
 			continue;
 		}
