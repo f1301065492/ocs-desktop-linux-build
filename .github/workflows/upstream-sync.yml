@@ -1,0 +1,214 @@
+name: Upstream Sync
+
+# 上游（ocsjs/ocs-desktop）有更新时自动合并。
+#
+# 行为：
+#   - 能干净合并 + 类型检查/工具自测通过 → 默认直接并入 main（定时任务）；
+#     手动触发默认只开 PR，可选 direct。
+#   - 冲突或检查失败 → 开/更新 issue，不改 main。
+#
+# 注意：PR 必须用 **merge commit** 合并（不要 squash / rebase），
+# 否则上游提交不会成为 main 的祖先，下一轮会重复同步。
+# 另外 GITHUB_TOKEN 推送不会触发其它 workflow，所以检查在本任务内完成。
+
+on:
+  schedule:
+    # 每天 03:17 UTC（北京时间 11:17）
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'direct = 检查通过后直接并入 main；pr = 只开 PR'
+        type: choice
+        options:
+          - pr
+          - direct
+        default: pr
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MODE: ${{ github.event.inputs.mode || 'direct' }}
+      UPSTREAM_REPO: https://github.com/ocsjs/ocs-desktop.git
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_REPO" 2>/dev/null || true
+          git fetch --no-tags upstream main
+          echo "UPSTREAM_SHA=$(git rev-parse upstream/main)" >> "$GITHUB_ENV"
+          echo "UPSTREAM_SHORT=$(git rev-parse --short upstream/main)" >> "$GITHUB_ENV"
+
+      - name: Check whether sync is needed
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "need=false" >> "$GITHUB_OUTPUT"
+            echo "上游已是最新（upstream/main 已是 main 的祖先）"
+          else
+            echo "need=true" >> "$GITHUB_OUTPUT"
+            echo "count=$(git rev-list --count HEAD..upstream/main)" >> "$GITHUB_OUTPUT"
+            echo "需要同步：$(git rev-list --count HEAD..upstream/main) 个上游提交"
+          fi
+
+      - name: Merge upstream
+        if: steps.check.outputs.need == 'true'
+        id: merge
+        run: |
+          git switch -c auto/upstream-sync
+          if git merge --no-edit upstream/main; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            echo "合并成功（无冲突）"
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflicts.txt" || true
+            git merge --abort || true
+            echo "存在冲突文件："
+            cat "$RUNNER_TEMP/conflicts.txt" || true
+          fi
+
+      - name: Open or update conflict issue
+        if: steps.check.outputs.need == 'true' && steps.merge.outputs.clean == 'false'
+        run: |
+          gh label create upstream-sync --color FBCA04 --description '上游同步' 2>/dev/null || true
+          {
+            echo "上游 \`${UPSTREAM_SHORT}\` 有 ${{ steps.check.outputs.count }} 个新提交，自动合并存在冲突。"
+            echo
+            echo "运行记录：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "冲突文件："
+            if [ -f "$RUNNER_TEMP/conflicts.txt" ]; then
+              sed 's/^/- `/' "$RUNNER_TEMP/conflicts.txt" | sed 's/$/`/'
+            else
+              echo "- （未能获取冲突列表，请查看运行日志）"
+            fi
+            echo
+            echo "处理方式见仓库根目录 \`FORK.md\` 第四节：以上游新版本为基线搬运 \`ext/\`，再重落 \`[ocs-ext]\` 钩子。"
+          } > "$RUNNER_TEMP/issue.md"
+          num=$(gh issue list --state open --label upstream-sync --limit 1 --json number -q '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md"
+          else
+            gh issue create --title "上游更新需要手动合并（${UPSTREAM_SHORT}）" --label upstream-sync --body-file "$RUNNER_TEMP/issue.md"
+          fi
+          exit 1
+
+      - name: Install pnpm
+        if: steps.merge.outputs.clean == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Install Node.js
+        if: steps.merge.outputs.clean == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14'
+          cache: 'pnpm'
+
+      - name: Run checks
+        if: steps.merge.outputs.clean == 'true'
+        id: checks
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            pnpm install --frozen-lockfile
+            pnpm dev:common
+            pnpm --filter @ocs-desktop/app exec tsc --noEmit -p tsconfig.json
+            pnpm --filter @ocs-desktop/web exec vue-tsc --noEmit
+            node tools/ocs-openclaw/test/run.mjs
+          } 2>&1 | tee "$RUNNER_TEMP/checks.log"
+
+      - name: Report check failure
+        if: steps.merge.outputs.clean == 'true' && steps.checks.outcome == 'failure'
+        run: |
+          gh label create upstream-sync --color FBCA04 --description '上游同步' 2>/dev/null || true
+          {
+            echo "上游 \`${UPSTREAM_SHORT}\` 可以干净合并，但类型检查 / 工具自测未通过，**未并入 main**。"
+            echo
+            echo "运行记录：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "失败日志尾部："
+            echo '```'
+            tail -n 60 "$RUNNER_TEMP/checks.log" || true
+            echo '```'
+            echo
+            echo "请在本机执行 \`git merge upstream/main\` 后按 \`FORK.md\` 排查。"
+          } > "$RUNNER_TEMP/issue.md"
+          num=$(gh issue list --state open --label upstream-sync --limit 1 --json number -q '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md"
+          else
+            gh issue create --title "上游更新检查未通过（${UPSTREAM_SHORT}）" --label upstream-sync --body-file "$RUNNER_TEMP/issue.md"
+          fi
+          exit 1
+
+      - name: Push to main
+        if: steps.checks.outcome == 'success' && env.MODE == 'direct'
+        id: push_main
+        continue-on-error: true
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            git merge --no-edit origin/main
+          fi
+          git push origin HEAD:main
+          echo "已自动合并到 main（merge commit，保留上游历史）" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or update pull request
+        if: steps.checks.outcome == 'success' && (env.MODE == 'pr' || steps.push_main.outcome == 'failure')
+        run: |
+          git push --force-with-lease origin HEAD:auto/upstream-sync
+          {
+            echo "自动同步上游 \`${UPSTREAM_SHORT}\`（${{ steps.check.outputs.count }} 个提交）。"
+            echo
+            echo "本任务已在合并后的代码上执行：依赖安装、common 构建、主进程与渲染进程类型检查、桥接工具自测。"
+            echo
+            echo "> 合并时请使用 **Create a merge commit**（不要 squash / rebase），"
+            echo "> 否则上游提交不会成为 main 的祖先，下一轮会重复同步。"
+          } > "$RUNNER_TEMP/pr.md"
+          num=$(gh pr list --state open --head auto/upstream-sync --json number -q '.[0].number')
+          if [ -z "$num" ]; then
+            gh pr create --base main --head auto/upstream-sync \
+              --title "chore: 同步上游 ${UPSTREAM_SHORT}" \
+              --body-file "$RUNNER_TEMP/pr.md"
+          else
+            gh pr edit "$num" --title "chore: 同步上游 ${UPSTREAM_SHORT}" --body-file "$RUNNER_TEMP/pr.md"
+          fi
+          # 仓库开启 auto-merge 时自动排队；必须用 merge commit
+          gh pr merge "$num" --merge --auto || echo "自动合并未启用，请手动以 merge commit 合并"
+
+      - name: Summary
+        if: steps.check.outputs.need == 'true'
+        run: |
+          {
+            echo "### 上游同步"
+            echo
+            echo "- 上游提交：\`${UPSTREAM_SHORT}\`"
+            echo "- 模式：\`${MODE}\`"
+            echo "- 合并：${{ steps.merge.outputs.clean }}"
+            echo "- 检查：${{ steps.checks.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"

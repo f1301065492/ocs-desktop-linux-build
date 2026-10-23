@@ -105,27 +105,62 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 
 ---
 
-## 四、同步上游的步骤
+## 四、自动同步上游
 
-1. **确认上游目标版本**并取回：
+`.github/workflows/upstream-sync.yml` 每天 03:17 UTC 检查一次上游 `main`：
+
+1. 若 `upstream/main` 已是 `main` 的祖先 → 无事发生。
+2. 尝试 `git merge upstream/main`：
+   - **能干净合并**：安装依赖 → common 构建 → 主进程 `tsc --noEmit` → 渲染进程 `vue-tsc --noEmit` → 桥接工具自测。
+     全绿后，定时任务默认**直接并入 main**（手动触发默认只开 PR）。
+   - **冲突或检查失败**：**不动 main**，自动开/更新一个 `upstream-sync` issue，里面带冲突文件列表和运行链接。
+3. 手动触发：`gh workflow run upstream-sync.yml --field mode=pr`（只开 PR）或 `--field mode=direct`（检查通过直接并）。
+
+几点约束：
+
+- 历史关联已在 `d339ea4` 建立：以本仓库快照对应的上游提交 `ecc6bb7`（2026-07-19）为第二父提交。
+  以后才能做真正的三方合并，不要删除这个合并提交的历史关系。
+- **PR 必须用 merge commit 合并，不能 squash / rebase**，否则上游提交不会成为 `main` 的祖先，
+  下一轮会把同一批更新再同步一遍。
+- Actions 用 `GITHUB_TOKEN` 推送不会触发其它 workflow（GitHub 的限制），所以检查是在
+  `upstream-sync` 任务里自己跑的；不要把它简化成“只开 PR、等 CI”。
+- `main` 若有分支保护、不允许 Actions 直接 push，任务会自动回退成 PR 模式。
+- **第一次同步（2.13 → 3.x）跨度很大**：上游把构建链迁到了 electron-vite、类型下沉到 common、
+  重做了界面与加密，实测有 30 处冲突，必然走“手动合并”路径；按第五节处理完这一次以后，
+  后续小版本更新才能稳定自动合并。
+
+
+## 五、手动同步上游（自动合并失败时）
+
+**方式 A：直接解冲突（推荐，适用于小范围更新）**
+
+1. 取回上游：
    ```bash
    git remote add upstream https://github.com/ocsjs/ocs-desktop.git   # 只需一次
    git fetch upstream --tags
    ```
-2. **以新版本为基线新建工作分支**（不要在本分支直接 merge，历史是快照开始的、无共同祖先）：
+2. 在分支上合并：
    ```bash
-   git switch -c sync/upstream-<版本> upstream/<版本>
+   git switch -c sync/upstream-<日期> main
+   git merge upstream/main
    ```
-3. **整体搬运扩展目录**（它们不依赖上游内部实现，只依赖公开导出）：
+3. 按第三节处理冲突：`ext/` 内保留我们的实现；上游钩子文件按 `[ocs-ext]` 重新落；
+   “整体替换/大改”的文件人工合并，不要直接覆盖。
+4. 验证（见下节），通过后用 **merge commit** 合回 `main`。
+
+**方式 B：换基线（适用于 3.x 这种大重构）**
+
+1. `git fetch upstream --tags`
+2. `git switch -c sync/upstream-<版本> upstream/<版本>`
+3. 整体搬运扩展目录：
    ```bash
    git checkout main -- packages/app/src/ext packages/web/src/ext tools 远程API说明.md
    ```
-4. **重新落钩子**：对照第三节，把 `[ocs-ext]` 行加到新版本对应文件的相同位置。
+4. 对照第三节，把 `[ocs-ext]` 行加到新版本对应文件的相同位置。
    钩子总量很小（每个文件 1–3 行）；若上游文件结构变化，用
-   `git diff 4d3e596..main -- <文件>` 看本分支当初是怎么接的。
-5. **重新落“整体替换/大改”的文件**：优先把上游的新实现与我们的改动做人工合并，
-   不要直接 `git checkout main --` 覆盖（会丢上游新功能）。
-6. **验证**（见下节），通过后把 `sync/upstream-<版本>` 合回 `main` 或直接以其为准。
+   `git diff d339ea4^1..main -- <文件>` 看本分支当初是怎么接的。
+5. 重新落“整体替换/大改”的文件（见第三节表格）。
+6. 验证通过后，以 **merge commit** 合回 `main`。
 
 ### 验证命令
 
@@ -152,7 +187,7 @@ cd tools/ocs-openclaw && node test/run.mjs
 
 ---
 
-## 五、只留本地的文件
+## 六、只留本地的文件
 
 以下文件被 `.gitignore` 忽略，**不提交、不推送**：
 
