@@ -233,13 +233,24 @@ jobs:
             echo "> 合并时请使用 **Create a merge commit**（不要 squash / rebase），"
             echo "> 否则上游提交不会成为 main 的祖先，下一轮会重复同步。"
           } > "$RUNNER_TEMP/pr.md"
-          num=$(gh pr list --state open --head auto/upstream-sync --json number -q '.[0].number')
+          num=$(gh api -X GET "repos/${GITHUB_REPOSITORY}/pulls" \
+            -f head="${GITHUB_REPOSITORY_OWNER}:auto/upstream-sync" -f state=open \
+            --jq '.[0].number' 2>/dev/null || true)
+          case "$num" in ''|*[!0-9]*) num="" ;; esac
+          jq -n --arg title "chore: 同步上游 ${UPSTREAM_SHORT}" \
+            --arg head "auto/upstream-sync" --arg base "main" \
+            --rawfile body "$RUNNER_TEMP/pr.md" \
+            '{title: $title, head: $head, base: $base, body: $body}' > "$RUNNER_TEMP/pr.json"
           if [ -z "$num" ]; then
-            gh pr create --base main --head auto/upstream-sync \
-              --title "chore: 同步上游 ${UPSTREAM_SHORT}" \
-              --body-file "$RUNNER_TEMP/pr.md"
+            # 用 REST 创建：细粒度 PAT 对部分 GraphQL 写操作会拒绝
+            num=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/pulls" \
+              --input "$RUNNER_TEMP/pr.json" --jq '.number')
           else
-            gh pr edit "$num" --title "chore: 同步上游 ${UPSTREAM_SHORT}" --body-file "$RUNNER_TEMP/pr.md"
+            jq -n --arg title "chore: 同步上游 ${UPSTREAM_SHORT}" \
+              --rawfile body "$RUNNER_TEMP/pr.md" \
+              '{title: $title, body: $body}' > "$RUNNER_TEMP/pr-edit.json"
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${num}" \
+              --input "$RUNNER_TEMP/pr-edit.json" >/dev/null
           fi
           # 仓库开启 auto-merge 时自动排队；必须用 merge commit
           gh pr merge "$num" --merge --auto || echo "自动合并未启用，请手动以 merge commit 合并"
