@@ -119,12 +119,19 @@ jobs:
             echo
             echo "处理方式见仓库根目录 \`FORK.md\` 第四节：以上游新版本为基线搬运 \`ext/\`，再重落 \`[ocs-ext]\` 钩子。"
           } > "$RUNNER_TEMP/issue.md"
-          num=$(gh issue list --state open --search '上游更新需要手动合并 in:title' --json number -q '.[0].number' || true)
+          num=$(gh api -X GET search/issues \
+            -f q="repo:${GITHUB_REPOSITORY} state:open in:title 上游更新需要手动合并" \
+            --jq '.items[0].number' 2>/dev/null || true)
           if [ -n "$num" ]; then
-            gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md" || \
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${num}/comments" \
+              -f body="$(cat "$RUNNER_TEMP/issue.md")" >/dev/null || \
               echo "::warning::无法评论 issue（令牌无写权限），冲突信息见运行摘要"
           else
-            gh issue create --title "上游更新需要手动合并（${UPSTREAM_SHORT}）" --body-file "$RUNNER_TEMP/issue.md" || \
+            jq -n --arg title "上游更新需要手动合并（${UPSTREAM_SHORT}）" \
+              --rawfile body "$RUNNER_TEMP/issue.md" \
+              '{title: $title, body: $body}' > "$RUNNER_TEMP/issue.json"
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues" \
+              --input "$RUNNER_TEMP/issue.json" >/dev/null || \
               echo "::warning::无法创建 issue（令牌无写权限），冲突信息见运行摘要"
           fi
           # 冲突信息同时写进运行摘要，令牌只读时也能看到
@@ -178,12 +185,19 @@ jobs:
             echo
             echo "请在本机执行 \`git merge upstream/main\` 后按 \`FORK.md\` 排查。"
           } > "$RUNNER_TEMP/issue.md"
-          num=$(gh issue list --state open --search '上游更新检查未通过 in:title' --json number -q '.[0].number' || true)
+          num=$(gh api -X GET search/issues \
+            -f q="repo:${GITHUB_REPOSITORY} state:open in:title 上游更新检查未通过" \
+            --jq '.items[0].number' 2>/dev/null || true)
           if [ -n "$num" ]; then
-            gh issue comment "$num" --body-file "$RUNNER_TEMP/issue.md" || \
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${num}/comments" \
+              -f body="$(cat "$RUNNER_TEMP/issue.md")" >/dev/null || \
               echo "::warning::无法评论 issue（令牌无写权限），失败信息见运行摘要"
           else
-            gh issue create --title "上游更新检查未通过（${UPSTREAM_SHORT}）" --body-file "$RUNNER_TEMP/issue.md" || \
+            jq -n --arg title "上游更新检查未通过（${UPSTREAM_SHORT}）" \
+              --rawfile body "$RUNNER_TEMP/issue.md" \
+              '{title: $title, body: $body}' > "$RUNNER_TEMP/issue.json"
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues" \
+              --input "$RUNNER_TEMP/issue.json" >/dev/null || \
               echo "::warning::无法创建 issue（令牌无写权限），失败信息见运行摘要"
           fi
           {
