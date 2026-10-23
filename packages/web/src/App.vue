@@ -33,14 +33,71 @@
 				</div>
 			</a-modal>
 
-			<!-- 全局：一键安装 -->
-			<Setup
-				v-model:visible="store.render.state.setup"
-				:preset-steps="['show_desc', 'init_env', 'init_extensions', 'init_script']"
-			></Setup>
+			<!-- 全局：欢迎使用引导（首次进入时于初始化弹窗之前展示） -->
+			<a-modal
+				:visible="store.render.state.welcome && store.render.state.setup"
+				:footer="false"
+				:closable="false"
+				:mask-closable="false"
+				:unmount-on-close="true"
+				:width="480"
+				@cancel="store.render.state.welcome = false"
+			>
+				<template #title>
+					<span class="welcome-title">🚀 {{ t('welcome_title', '欢迎使用 OCS 桌面软件') }}</span>
+				</template>
+				<div class="welcome-body">
+					<p class="welcome-desc">
+						{{
+							t(
+								'welcome_desc',
+								'OCS 桌面软件是一款浏览器自动化工具，可以帮助你自动初始化浏览器环境、脚本管理器拓展与用户脚本，支持浏览器多开管理、自动登录、自动安装用户脚本等，让浏览器自动化变得简单高效。'
+							)
+						}}
+					</p>
+					<p class="welcome-tip">
+						{{ t('welcome_init_tip', '使用软件前需要初始化一下环境，点击下方按钮开始！') }}
+					</p>
+					<div
+						class="text-center"
+						style="margin-top: 20px"
+					>
+						<a-button
+							type="primary"
+							size="large"
+							@click="store.render.state.welcome = false"
+						>
+							{{ t('welcome_start_btn', '开始初始化') }}
+						</a-button>
+					</div>
+				</div>
+			</a-modal>
 
-			<!-- 全局：新建浏览器自动初始化 -->
+			<!-- 全局：一键安装 -->
+			<template v-if="!store.render.state.welcome">
+				<Setup
+					v-model:visible="store.render.state.setup"
+					:auto-setup="true"
+					:preset-steps="[
+						'show_desc',
+						'init_env',
+						'new_browser',
+						'init_automationScript',
+						'init_extensions',
+						'init_script',
+						'update_env'
+					]"
+					@finish="
+						() => {
+							store.render.state.setup = false;
+						}
+					"
+				></Setup>
+			</template>
+
+			<!-- 全局：新建浏览器自动初始化（仅打开时挂载，避免启动即运行初始化流程并永久挂起） -->
 			<Setup
+				v-if="store.render.state.newBrowserSetup"
 				v-model:visible="store.render.state.newBrowserSetup"
 				auto-setup
 				title="新建浏览器"
@@ -53,35 +110,68 @@
 					}
 				"
 			></Setup>
+
+			<!-- 全局状态栏：固定右下角显示，避免顶部栏跨平台渲染位置不一致
+			     （mac 下状态信息在右侧，文本过长会把按钮顶到左侧） -->
+			<div class="status-bar-container">
+				<StatusBar />
+			</div>
 		</div>
 	</a-config-provider>
 </template>
 
 <script setup lang="ts">
 import { watch, onMounted, onUnmounted } from 'vue';
-import { store } from './store';
+import { store, t } from './store';
 import { remote } from './utils/remote';
 import { root } from './fs/folder';
 import { electron } from './utils/node';
-import { closeAllBrowser, showClearBrowserCachesModal } from './utils/browser';
-import { about, changeTheme, fetchRemoteNotify, fetchRemoteLangs, setAlwaysOnTop, setAutoLaunch } from './utils';
+import { closeAllBrowser, showClearBrowserCachesModal, askCloseOrTray } from './utils/browser';
+import { processes } from './utils/process';
+import {
+	changeTheme,
+	fetchRemoteNotify,
+	fetchRemoteLangs,
+	setAlwaysOnTop,
+	setAutoLaunch,
+	initThemeSystemListener
+} from './utils';
 import { activeIpcRenderListener } from './utils/ipc';
-// [ocs-ext] 扩展能力：持久化 / 远程 API worker / 主动通知自启动
-import { saveStoreToLocal, saveStoreToLocalSync } from './ext/persist';
-import { startRemoteApiWorker } from './ext/remote-api/worker';
-import { startDshNotifyIfEnabled } from './ext/dsh/autostart';
 import { getWindowsRelease } from './utils/os';
 import { currentBrowser } from './fs';
 import { Modal, Message } from '@arco-design/web-vue';
 import zhCN from '@arco-design/web-vue/es/locale/lang/zh-cn';
-import cloneDeep from 'lodash/cloneDeep';
 import debounce from 'lodash/debounce';
 import Title from './components/Title.vue';
+import StatusBar from './components/StatusBar.vue';
 import BrowserPanel from './components/browsers/BrowserPanel.vue';
 import BrowserPanelOperators from './components/BrowserPanelOperators.vue';
 import Setup from './components/Setup.vue';
+// [ocs-ext] 扩展能力：远程 API worker / 主动通知自启动
+import { startRemoteApiWorker } from './ext/remote-api/worker';
+import { startDshNotifyIfEnabled } from './ext/dsh/autostart';
 
 const { ipcRenderer } = electron;
+
+/** 异步保存，用于实时持久化（单次 IPC 调用，加密+写入在主进程完成） */
+async function saveStoreToLocal(_store: typeof store) {
+	try {
+		const shouldEncrypt = remote.methods.callSync('isEncryptionAvailable');
+		await remote.methods.call('saveStore', JSON.stringify(_store), shouldEncrypt);
+	} catch (e) {
+		console.error(e);
+	}
+}
+
+/** 同步版本保存，用于关闭时确保数据写入磁盘（单次 IPC 调用） */
+function saveStoreToLocalSync(_store: typeof store) {
+	try {
+		const shouldEncrypt = remote.methods.callSync('isEncryptionAvailable');
+		remote.methods.callSync('saveStore', JSON.stringify(_store), shouldEncrypt);
+	} catch (e) {
+		console.error(e);
+	}
+}
 
 onMounted(async () => {
 	/** 开启 Ipc 通道监听 */
@@ -108,24 +198,28 @@ onMounted(async () => {
 	setAutoLaunch();
 	setAlwaysOnTop();
 	changeTheme().catch(console.error);
+	initThemeSystemListener();
 
 	/** [ocs-ext] 若在设置里开启了主动通知（DSH），随应用启动拉起 ocs-watch */
 	startDshNotifyIfEnabled();
 
-	/** 打开关于软件 */
-	if (store.render.state.first) {
-		about().catch(console.error);
-	}
+	/** Linux 透明圆角窗口：最大化时去除圆角（直角铺满屏幕） */
+	ipcRenderer.on('window-maximize-change', (_e, maximized: boolean) => {
+		document.documentElement.classList.toggle('window-maximized', maximized);
+	});
 
 	/** 监听屏幕变化 */
 	onResize();
 	window.addEventListener('resize', onResize);
 
-	/** 获取最新远程通知 */
-	fetchRemoteNotify(false).catch(console.error);
-
 	/** 获取远程语言 */
 	fetchRemoteLangs().catch(console.error);
+
+	// 首次初始化不显示通知。
+	if (!store.render.state.setup) {
+		/** 获取最新远程通知 */
+		fetchRemoteNotify(false).catch(console.error);
+	}
 
 	/** 检测浏览器缓存大小，超过阈值则提示 */
 	remote.methods.call('statisticFolderSize', store.paths.userDataDirsFolder).then((totalSize) => {
@@ -134,15 +228,11 @@ onMounted(async () => {
 		}
 	});
 
-	/** 监听主题变化 */
+	/** 监听主题变化（白天/夜间/自动 + 主题颜色） */
 	watch(
-		() => cloneDeep(store.render.setting.theme),
-		(cur) => {
-			if (cur.dark) {
-				document.body.setAttribute('arco-theme', 'dark');
-			} else {
-				document.body.removeAttribute('arco-theme');
-			}
+		() => [store.render.setting.theme.mode, store.render.setting.theme.color],
+		() => {
+			changeTheme().catch(console.error);
 		}
 	);
 
@@ -176,20 +266,31 @@ onMounted(async () => {
 		}
 	}
 
-	watch([() => store.render], debounce(performSave, 100), { deep: true });
+	// 监听范围必须覆盖全部可配置段：updater/server/window/paths 的修改同样需要持久化，
+	// 否则主进程 electron-store 一直是旧值（例如开发者设置里改更新源后主进程读不到）
+	watch(
+		[
+			() => store.render,
+			() => store.updater,
+			() => store.server,
+			() => store.window,
+			() => store.paths,
+			() => store.scriptResources
+		],
+		debounce(performSave, 100),
+		{ deep: true }
+	);
 
 	/** 全局唯一关闭处理 */
 	let isExiting = false;
-	ipcRenderer.on('close', async () => {
-		// 防重入：避免重复点击关闭按钮或 window.close 循环导致并发触发关闭流程、重复弹窗
-		if (isExiting) return;
-		isExiting = true;
+
+	/** 完整退出流程：关闭浏览器 + 保存数据 + 退出应用。返回 false 表示用户取消了关闭 */
+	async function performFullExit(skipBrowserConfirm = false) {
 		console.log('关闭浏览器中...');
-		const res = await closeAllBrowser();
+		const res = await closeAllBrowser(skipBrowserConfirm);
 		if (res === false) {
-			isExiting = false;
 			console.log('有浏览器拒绝关闭，取消退出');
-			return;
+			return false;
 		}
 		console.log('保存数据中...');
 		const m = Modal.info({ content: '正在保存数据...', closable: false, maskClosable: false, footer: false });
@@ -197,7 +298,58 @@ onMounted(async () => {
 		saveStoreToLocalSync(store);
 		m.close();
 		console.log('数据已保存');
-		remote.app.call('exit', 0);
+		// 即将退出：销毁托盘避免 Windows 残留图标，再通过 quitApp 程序化退出（绕过隐藏到托盘）
+		remote.methods.call('destroyTray');
+		remote.methods.call('quitApp', 0);
+		return true;
+	}
+
+	ipcRenderer.on('close', async () => {
+		// 防重入：避免重复点击关闭按钮或 window.close 循环导致并发触发关闭流程、重复弹窗
+		if (isExiting) return;
+		// 后台运行：关闭窗口时仅隐藏到系统托盘，浏览器与自动化任务保持运行，不退出应用
+		if (store.window.hideToTrayOnClose) {
+			remote.methods.call('hideToTray');
+			return;
+		}
+		// 后台运行未开启：若仍有浏览器正在运行，询问「关闭并退出」还是「移动至托盘运行」
+		if (processes.length > 0) {
+			// 询问期间占位防重入，取消/移动至托盘时复位
+			isExiting = true;
+			const choice = await askCloseOrTray();
+			if (choice === 'tray') {
+				isExiting = false;
+				remote.methods.call('hideToTray');
+				return;
+			}
+			if (choice === 'cancel') {
+				isExiting = false;
+				return;
+			}
+			// choice === 'exit'：用户已确认关闭，跳过 closeAllBrowser 的二次确认弹窗
+			if (!(await performFullExit(true))) {
+				isExiting = false;
+				remote.methods.call('cancelQuit');
+			}
+			return;
+		}
+		// 无浏览器运行：直接执行完整退出流程
+		isExiting = true;
+		if (!(await performFullExit())) {
+			// 用户取消了关闭浏览器，复位退出标记与程序化退出标记，恢复「隐藏到托盘」能力
+			isExiting = false;
+			remote.methods.call('cancelQuit');
+		}
+	});
+
+	/** 托盘「退出」/ 程序化退出：绕过「隐藏到托盘」逻辑，强制执行完整退出流程 */
+	ipcRenderer.on('quit', async () => {
+		if (isExiting) return;
+		isExiting = true;
+		if (!(await performFullExit())) {
+			isExiting = false;
+			remote.methods.call('cancelQuit');
+		}
 	});
 });
 
@@ -212,10 +364,8 @@ function onResize() {
 	store.render.state.responsive = isInMobile ? 'mini' : 'small';
 
 	if (document.documentElement.clientWidth < 800) {
-		store.render.setting.showSideBarText = false;
 		store.render.state.mini = true;
 	} else {
-		store.render.setting.showSideBarText = true;
 		store.render.state.mini = false;
 	}
 }
@@ -224,6 +374,42 @@ function onResize() {
 <style lang="less">
 @import '@/assets/css/bootstrap.min.css';
 @import '@/assets/css/common.css';
+
+/* Linux 无边框透明窗口：系统不提供原生圆角（Win11/macOS 由系统绘制），用 CSS 圆角 + 细描边模拟。
+   注意两个 CSS 传播陷阱，圆角必须设在 #app 而非 body/html：
+   1. body/html 的背景会传播到整个画布（含圆角之外的区域），四角被画布背景填满；
+   2. html 的 overflow 为 visible 时，body 的 overflow 同样会传播到视口，body 自身不建立裁剪，
+      border-radius 形同虚设。#app 是普通元素，无传播规则，圆角裁剪可靠生效 */
+body.platform-linux {
+	/* 覆盖 bootstrap 与 theme.less 中 body 的背景色，防止传播到画布 */
+	background-color: transparent !important;
+}
+body.platform-linux #app {
+	border-radius: 12px;
+	overflow: hidden;
+	background-color: #ffffff;
+	/* 用内阴影模拟描边：border 会占用布局空间导致内容与窗口边缘错位 */
+	box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+body.platform-linux[arco-theme='dark'] #app {
+	background-color: #2c2c2c;
+	box-shadow: inset 0 0 0 1px #4b4848;
+}
+/* 最大化时去除圆角与描边，直角铺满屏幕 */
+html.window-maximized body.platform-linux #app {
+	border-radius: 0;
+	box-shadow: none;
+}
+
+/* 全局状态栏：固定右下角，宽度自适应内容，向左扩展不遮挡右侧边缘 */
+.status-bar-container {
+	position: fixed;
+	right: 12px;
+	bottom: 12px;
+	z-index: 3000;
+	display: flex;
+	justify-content: flex-end;
+}
 
 .main-container {
 	display: grid;
@@ -237,6 +423,25 @@ function onResize() {
 
 .arco-message-list {
 	top: calc(40px + var(--title-height)) !important;
+}
+
+.welcome-title {
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.welcome-body {
+	.welcome-desc {
+		color: #4e5969;
+		line-height: 1.8;
+		margin-bottom: 16px;
+	}
+
+	.welcome-tip {
+		color: #1d2129;
+		font-weight: 500;
+		margin-bottom: 0;
+	}
 }
 
 /* 新手教程遮罩层 */

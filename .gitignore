@@ -8,6 +8,15 @@
 bin/
 package-lock.json
 
+.codebuddy/plans
+.claude/plans
+
+# OCS 数据导出文件（含账号密码等敏感数据的本地测试样本，永不入库）
+*.ocsdata
+
+# 加密测试文件（本地维护，不入库）
+packages/app/tests/crypto.test.ts
+
 # tsc
 
 lib/
@@ -104,6 +113,9 @@ out
 # Nuxt.js build / generate output
 .nuxt
 dist/
+
+# electron-builder 安装包产物（仓库根目录，见 packages/app/electron.builder.json directories.output）
+releases/
 
 # Gatsby files
 .cache/

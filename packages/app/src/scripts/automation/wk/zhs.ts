@@ -1,55 +1,51 @@
 import { Page } from 'playwright-core';
-import { breakSliderVerify, getBase64 } from '../../utils';
-import { AutomationScript } from '../../script';
+import axios from 'axios';
+import { ensureWideViewport, getBase64, slowType } from '../../utils';
+import { AutomationScript } from '@ocs-desktop/common';
 
 /**
- * 智慧树登录（2026-10 页面改版后）
- *
- * 首页的「登录 / 注册」入口 `#notLogin` 现在会跳到 `login.zhihuishu.com` 的登录中心，
- * 表单换成了 Element Plus 结构：
- * - 手机号 / 用户名：`input[name="mobile"]`
- * - 密码：`input[type="password"]`
- * - 「我已阅读并同意…」：`label.privacy-checkbox input[type="checkbox"]`（默认未勾）
- * - 提交：`.login-bottom .base-button-component`
- * - 学号登录 tab：`#tab-2`，学校是 Element Plus 下拉（`.el-select` → 输入 → `.el-select-dropdown__item`），学号 `input[name="unid"]`
- *
- * 改版前那套 `#qSignin` / `#lUsername` / `#lPassword` / `#quickSearch` / `#clCode` /
- * `#clPassword` / `.wall-sub-btn` 已经**全部不存在**，照旧用它们只会一路超时，
- * 表现为“启动浏览器后账号密码填不进去”。
- *
- * 验证码仍是网易易盾（`input.yidun_input[name="NECaptchaValidate"]`），滑块逻辑不变。
- *
- * 登录态判断不看首页：会话失效时首页仍显示成已登录，只看首页会误判「不用登录」。
- * 改为直接访问「我的课程」（见 COURSE_PAGE_URL），被重定向到登录中心才算没登录。
+ * 拼图图形在 jigsaw img 内的左边距（自然像素）。
+ * yidun 拼图 img 左缘与背景图左缘对齐，但拼图图形本身在 img 内有少量透明左边距，
+ * 因此拼图 img 应落到「缺口左缘 - PIECE_PAD * pzScale」处。若滑块仍偏 1~3px，微调此值。
  */
-const LOGIN_PAGE_HOST = 'login.zhihuishu.com';
-const LOGIN_SUBMIT_SELECTOR = '.login-bottom .base-button-component, .btn-block__grandient_login';
-const PRIVACY_CHECKBOX_SELECTOR = 'label.privacy-checkbox input[type="checkbox"]';
+const PIECE_PAD = 4;
 
-/**
- * 「我的课程」——判断登录态用它，不用首页。
- *
- * 未登录访问它会被重定向到 login.zhihuishu.com，和用户手动点「我的课程」是同一条路径，
- * 所以能同时抓到「从没登录」和「会话失效但首页还显示已登录」两种情况。
- */
-const COURSE_PAGE_URL = 'https://onlineweb.zhihuishu.com/onlinestuh5';
-const COURSE_PAGE_HOST = 'onlineweb.zhihuishu.com';
-
-export const ZHSUnitLoginScript = new AutomationScript(
+export const ZHSLoginScript = new AutomationScript(
 	{
+		loginType: {
+			label: '登录方式',
+			value: 'phone',
+			type: 'select',
+			options: [
+				{ label: '手机密码登录', value: 'phone' },
+				{ label: '学校登录', value: 'unit' }
+			]
+		},
+		phone: {
+			label: '手机号',
+			value: '',
+			type: 'text',
+			required: true,
+			placeholder: '请输入手机号',
+			pattern: '^1[3-9]\\d{9}$',
+			patternMessage: '手机号格式不正确',
+			visibleWhen: { key: 'loginType', value: 'phone' }
+		},
 		schoolname: {
 			label: '学校',
 			value: '',
 			type: 'text',
 			required: true,
-			placeholder: '请输入学校名称'
+			placeholder: '请输入学校名称',
+			visibleWhen: { key: 'loginType', value: 'unit' }
 		},
 		id: {
 			label: '学号',
 			value: '',
 			type: 'text',
 			required: true,
-			placeholder: '请输入学号'
+			placeholder: '请输入学号',
+			visibleWhen: { key: 'loginType', value: 'unit' }
 		},
 		password: {
 			label: '密码',
@@ -60,7 +56,7 @@ export const ZHSUnitLoginScript = new AutomationScript(
 		}
 	},
 	{
-		name: '智慧树-学校登录',
+		name: '智慧树-自动登录',
 		icon: 'https://www.zhihuishu.com/',
 		async run(
 			page,
@@ -72,132 +68,145 @@ export const ZHSUnitLoginScript = new AutomationScript(
 			}
 		) {
 			try {
-				if (await isNotLogin(page, (message) => ZHSUnitLoginScript.emit('script-data', message))) {
-					ZHSUnitLoginScript.emit('script-data', '智慧树：开始登录（学校 / 学号）');
-					// 切到「学号登录」tab
-					await page.click('#tab-2');
-					await page.waitForTimeout(1500);
+				// 登录页为固定宽度桌面布局，窄视口下元素会被裁出可视区，先确保窗口足够宽再导航
+				await ensureWideViewport(page);
+				if (await isNotLogin(page)) {
+					if (configs.loginType === 'unit') {
+						// 切换到 学号登录 标签页
+						await page.click('div[role="tab"]:has-text("学号登录")');
+						await page.waitForTimeout(1000);
 
-					// 学校是个下拉：点开 → 输入学校名 → 点第一个候选项
-					await page.click('.el-select');
-					await page.waitForTimeout(500);
-					await page.keyboard.type(configs.schoolname, { delay: 100 });
-					await page.waitForSelector('.el-select-dropdown__item', { timeout: 30 * 1000 });
-					await page.waitForTimeout(1500);
-					await page.click('.el-select-dropdown__item');
+						// 输入学校名称，过滤下拉列表
+						const schoolInput = 'input.el-select__input:visible';
+						await page.click(schoolInput);
+						await slowType(page, schoolInput, configs.schoolname);
+						// 等待远程学校列表加载完成（下拉框挂载在 body 下，需匹配可见的那个）
+						await page.waitForSelector('.el-select-dropdown__item:visible', { timeout: 10_000 });
+						await page.waitForTimeout(500);
+						// 单击第一个匹配的学校
+						await page.click('.el-select-dropdown__item:visible');
 
-					await page.fill('input[name="unid"]', configs.id);
-					await page.fill('input[type="password"]', configs.password);
-					await acceptPrivacy(page);
-					await page.waitForTimeout(3000);
-					await page.click(LOGIN_SUBMIT_SELECTOR);
+						await page.fill('input[name="unid"]', configs.id);
+						await page.fill('input[type="password"]:visible', configs.password);
+						// 勾选用户协议，否则无法登录
+						await checkAgreement(page);
+
+						// 点击登录按钮
+						await page.waitForTimeout(1000);
+						await page.click('.btn-block__grandient_login');
+					} else {
+						// 切换到 账号登录 标签页（默认选中，此处确保状态正确）
+						await page.click('div[role="tab"]:has-text("账号登录")');
+						await page.waitForTimeout(1000);
+
+						await page.fill('input[name="mobile"]', configs.phone);
+						await page.fill('input[type="password"]:visible', configs.password);
+						// 勾选用户协议，否则无法登录
+						await checkAgreement(page);
+						await page.waitForTimeout(1000);
+						await page.click('.btn-block__grandient_login');
+					}
 
 					if (options?.ocrApiUrl && options?.detTargetKey && options?.detBackgroundKey) {
-						let count = 5;
-						let notified = false;
-						while (await isNotVerified(page)) {
-							if (count > 0) {
-								count--;
-								if (!notified) {
-									notified = true;
-									ZHSUnitLoginScript.emit('script-data', '智慧树：检测到验证码，尝试自动识别');
-								}
-								await verify(page, {
-									ocrApiUrl: options.ocrApiUrl,
-									detTargetKey: options.detTargetKey,
-									detBackgroundKey: options.detBackgroundKey
-								});
-
-								await page.waitForTimeout(2000);
-							} else {
-								throw new Error('滑块识别失败，请手动登录。');
-							}
-						}
-						ZHSUnitLoginScript.emit('script-data', '智慧树：登录成功');
+						await loopVerify(page, {
+							ocrApiUrl: options.ocrApiUrl,
+							detTargetKey: options.detTargetKey,
+							detBackgroundKey: options.detBackgroundKey
+						});
 					}
 				}
 			} catch (err) {
-				ZHSUnitLoginScript.emit('script-error', String(err));
+				ZHSLoginScript.emit('script-error', String(err));
 			}
 		}
 	}
 );
 
-export const ZHSPhoneLoginScript = new AutomationScript(
-	{
-		phone: {
-			label: '手机号',
-			value: '',
-			type: 'text',
-			required: true,
-			placeholder: '请输入手机号'
-		},
-		password: {
-			label: '密码',
-			value: '',
-			type: 'password',
-			required: true,
-			placeholder: '请输入密码'
+/** 勾选用户协议（点击勾选控件本身，避免命中《用户协议》链接而弹出 /protocal 页面） */
+async function checkAgreement(page: Page) {
+	const isChecked = () =>
+		page.evaluate(() => {
+			const label = document.querySelector('.privacy-checkbox');
+			return (
+				!!label?.classList.contains('is-checked') ||
+				!!(label?.querySelector('input[type="checkbox"]') as HTMLInputElement | null)?.checked
+			);
+		});
+
+	if (await isChecked()) {
+		return;
+	}
+
+	// 点击 label 内的勾选控件（role=checkbox / 复选框本体），不触碰含链接的文字
+	await page.evaluate(() => {
+		const label = document.querySelector('.privacy-checkbox');
+		if (!label) {
+			return;
 		}
-	},
-	{
-		name: '智慧树-手机密码登录',
-		icon: 'https://www.zhihuishu.com/',
-		async run(
-			page,
-			configs,
-			options?: {
-				ocrApiUrl?: string;
-				detTargetKey?: string;
-				detBackgroundKey?: string;
+		const control =
+			(label.querySelector('[role="checkbox"]') as HTMLElement | null) ||
+			(label.querySelector('.el-checkbox__inner') as HTMLElement | null) ||
+			(label.querySelector('input[type="checkbox"]') as HTMLElement | null) ||
+			// 退而求其次：label 中不含 <a> 的子元素（即勾选框，非协议链接文字）
+			(Array.from(label.children).find((c) => !c.querySelector('a')) as HTMLElement | undefined);
+		(control ?? (label as HTMLElement)).click();
+	});
+	await page.waitForTimeout(300);
+
+	if (await isChecked()) {
+		return;
+	}
+
+	// 仍未勾选：退回点击整个 label，并关闭随之弹出的 /protocal 标签
+	const popupPromise = page.waitForEvent('popup', { timeout: 2000 }).catch(() => null);
+	await page.click('label.privacy-checkbox');
+	const popup = await popupPromise;
+	if (popup) {
+		await popup.close().catch(() => {});
+	}
+	// 兜底：关闭可能已打开的其它 /protocal 标签
+	await Promise.all(
+		page
+			.context()
+			.pages()
+			.filter((p) => p !== page && p.url().includes('protocal'))
+			.map((p) => p.close().catch(() => {}))
+	);
+}
+
+/** 循环进行滑块验证，直至登录成功 */
+async function loopVerify(page: Page, opts: { ocrApiUrl: string; detTargetKey: string; detBackgroundKey: string }) {
+	let count = 5;
+	while (await isNotVerified(page)) {
+		if (count > 0) {
+			count--;
+			// 滑块弹窗未弹出（或已被关闭）时，重新点击登录按钮触发验证码
+			if (!(await isYidunPopupVisible(page))) {
+				await page.click('.btn-block__grandient_login');
+				await page.waitForTimeout(1000);
 			}
-		) {
-			try {
-				if (await isNotLogin(page, (message) => ZHSPhoneLoginScript.emit('script-data', message))) {
-					ZHSPhoneLoginScript.emit('script-data', '智慧树：开始手机密码登录');
-					// 默认就是「账号登录」tab，这里显式点一次；点不动（比如又改版）也不影响后面按选择器填
-					await page.click('#tab-1\\.1').catch(() => {});
-					await page.waitForTimeout(1000);
-
-					await page.fill('input[name="mobile"]', configs.phone);
-					await page.fill('input[type="password"]', configs.password);
-					await acceptPrivacy(page);
-					await page.waitForTimeout(3000);
-					await page.click(LOGIN_SUBMIT_SELECTOR);
-
-					if (options?.ocrApiUrl && options?.detTargetKey && options?.detBackgroundKey) {
-						let count = 5;
-						let notified = false;
-						while (await isNotVerified(page)) {
-							if (count <= 0) {
-								// 与学校登录一致：识别不出来就抛错，让调用方（软件日志 / 远程 API）看到明确失败
-								throw new Error('滑块识别失败，请手动登录。');
-							}
-							count--;
-							if (!notified) {
-								notified = true;
-								ZHSPhoneLoginScript.emit('script-data', '智慧树：检测到验证码，尝试自动识别');
-							}
-							await verify(page, {
-								ocrApiUrl: options.ocrApiUrl,
-								detTargetKey: options.detTargetKey,
-								detBackgroundKey: options.detBackgroundKey
-							});
-
-							await page.waitForTimeout(2000);
-						}
-						ZHSPhoneLoginScript.emit('script-data', '智慧树：登录成功');
-					}
-				}
-			} catch (err) {
-				ZHSPhoneLoginScript.emit('script-error', String(err));
-			}
+			await verify(page, opts);
+			await page.waitForTimeout(2000);
+		} else {
+			throw new Error('滑块识别失败，请手动登录。');
 		}
 	}
-);
+}
+
+/** 易盾验证码弹窗是否可见 */
+async function isYidunPopupVisible(page: Page) {
+	return page.evaluate(() => {
+		const el = document.querySelector('.yidun_popup') as HTMLElement;
+		return !!el && !!(el.offsetWidth || el.offsetHeight);
+	});
+}
 
 /**
  * 滑块验证
+ *
+ * 直接调用本地 /ocr（ddddocr）获取缺口位置，自行做坐标换算与拖动：
+ * ddddocr 返回的 target[0] 是背景图「自然像素」坐标，乘 bgScale 换算为渲染位移，
+ * 再扣掉拼图在 img 内的左边距，最后用闭环伺服（实测拼图位移反馈）逼近目标。
  */
 async function verify(page: Page, opts: { ocrApiUrl: string; detTargetKey: string; detBackgroundKey: string }) {
 	// 删除yidun遮挡
@@ -209,136 +218,169 @@ async function verify(page: Page, opts: { ocrApiUrl: string; detTargetKey: strin
 	const det_target_el = await page.$('[alt="验证码滑块"]');
 	const det_bg_el = await page.$('[alt="验证码背景"]');
 
-	if (det_target_el && det_slider_el && det_bg_el) {
-		const det_target_src = await det_target_el.getAttribute('src');
-		const det_bg_src = await det_bg_el.getAttribute('src');
-		if (det_target_src && det_bg_src) {
-			await breakSliderVerify(page, det_slider_el, await getBase64(det_target_src), await getBase64(det_bg_src), {
-				...opts,
-				offset: 10
-			});
-		}
+	if (!det_target_el || !det_slider_el || !det_bg_el) {
+		return;
 	}
+
+	const det_target_src = await det_target_el.getAttribute('src');
+	const det_bg_src = await det_bg_el.getAttribute('src');
+	if (!det_target_src || !det_bg_src) {
+		return;
+	}
+
+	// 调用本地 ddddocr 识别缺口
+	const body = Object.create({});
+	Reflect.set(body, opts.detTargetKey, await getBase64(det_target_src));
+	Reflect.set(body, opts.detBackgroundKey, await getBase64(det_bg_src));
+	const { data } = await axios.post(opts.ocrApiUrl, body);
+	console.log('slider ocr', JSON.stringify(data));
+
+	if (data?.error) {
+		// error 可能来自服务端序列化后的原始对象，统一转为可读消息
+		const msg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+		throw new Error(msg);
+	}
+	if (!data?.canOCR) {
+		throw new Error('未检测到图片验证码识别模块, 请手动输入验证码，或在软件左侧应用中心安装识别模块后重启浏览器。。');
+	}
+	const targetX = Number(data?.det?.target?.[0]);
+	if (!Number.isFinite(targetX)) {
+		throw new Error('滑块验证识别失败，请尝试手动登录。');
+	}
+
+	// 背景图/拼图几何：计算渲染缩放，目标为「渲染像素」（相对背景图左缘）
+	const bgGeom = await det_bg_el.evaluate((node) => {
+		const b = node as HTMLImageElement;
+		const r = b.getBoundingClientRect();
+		return { naturalW: b.naturalWidth || r.width, displayW: r.width };
+	});
+	const pzGeom = await det_target_el.evaluate((node) => {
+		const b = node as HTMLImageElement;
+		const r = b.getBoundingClientRect();
+		return { naturalW: b.naturalWidth || r.width, displayW: r.width };
+	});
+	const bgScale = bgGeom.displayW / bgGeom.naturalW || 1;
+	const pzScale = pzGeom.displayW / pzGeom.naturalW || 1;
+	// ddddocr 的 target[0] 是背景图自然像素坐标，乘 bgScale 得缺口渲染位置；
+	// 拼图图形在 img 内有 PIECE_PAD 左边距（自然像素），需乘 pzScale 扣除
+	const targetPieceLeft = targetX * bgScale - PIECE_PAD * pzScale;
+
+	// 滑块按钮起点与行程上限（轨道宽 - 滑块宽，随分辨率动态变化）
+	const handleRect = await det_slider_el.evaluate((node) => {
+		const r = (node as HTMLElement).getBoundingClientRect();
+		return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width };
+	});
+	const controlW = await page.evaluate(() => {
+		const el = document.querySelector('.yidun_control') as HTMLElement | null;
+		return el ? el.getBoundingClientRect().width : 0;
+	});
+	const maxSlider = Math.max(0, controlW - handleRect.w) || 200;
+
+	// 闭环伺服拖动：以拼图实际渲染位移为反馈逐步逼近，不依赖联动比例，兼容任意分辨率/缩放
+	await servoDrag(page, handleRect.x, handleRect.y, targetPieceLeft, maxSlider);
+
+	try {
+		await page.waitForNavigation({ timeout: 3000, waitUntil: 'domcontentloaded' });
+	} catch {}
 }
 
 /**
- * 是否仍未登录成功。
+ * 闭环伺服拖动：以拼图实际渲染位移为反馈，逐步逼近目标位置。
  *
- * 登录中心在 login.zhihuishu.com，登录成功后页面会跳走；页面上出现表单校验 / 服务端提示的错误时直接抛出去，
- * 免得把一个明确的失败（密码错误、需要验证码等）拖到最后变成“滑块识别失败”。
+ * 易盾弹窗为响应式布局，背景图被 CSS 缩放（scale 随分辨率/浏览器缩放变化），
+ * 拼图位移与鼠标位移并非 1:1（实测拼图位移 = 鼠标位移 * scale）。旧算法按 1:1
+ * 一次算到位 + 单次补正，分辨率一变必然偏；伺服用「实测位移」闭环收敛，
+ * 与联动比例无关，天然兼容任意分辨率。残差大走大步、小走小步，先快后慢更像真人。
  */
+async function servoDrag(page: Page, sx: number, sy: number, targetPieceLeft: number, maxSlider: number) {
+	await page.mouse.move(sx, sy);
+	await page.mouse.down();
+	// 等待易盾联动生效，读取拼图初始渲染位移
+	await page.waitForTimeout(70);
+	let sliderLeft = 0;
+	let pieceLeft = await readPieceRenderLeft(page);
+	let lastResidual = Number.NaN;
+	let stuck = 0;
+	for (let i = 0; i < 60; i++) {
+		const residual = targetPieceLeft - pieceLeft;
+		if (Math.abs(residual) <= 2) {
+			break;
+		}
+		if (sliderLeft >= maxSlider) {
+			break;
+		}
+		// 反馈无变化（联动卡住）连续多次时放弃本次拖动
+		if (Math.abs(residual - lastResidual) < 0.01) {
+			if (++stuck > 4) {
+				break;
+			}
+		} else {
+			stuck = 0;
+		}
+		// 先粗后细：残差大走大步、逼近后走小步
+		const step = Math.abs(residual) > 40 ? 10 : Math.abs(residual) > 12 ? 5 : 2;
+		const next = Math.min(maxSlider, Math.max(0, sliderLeft + Math.sign(residual) * step));
+		if (next === sliderLeft) {
+			break;
+		}
+		sliderLeft = next;
+		// 轻微纵向抖动，防行为检测
+		await page.mouse.move(sx + sliderLeft, sy + Math.sin(i * 0.8));
+		await page.waitForTimeout(70);
+		pieceLeft = await readPieceRenderLeft(page);
+		lastResidual = residual;
+	}
+	await page.mouse.up();
+}
+
+/** 拼图实际渲染位移：拼图 img 左缘相对背景图左缘（渲染像素） */
+async function readPieceRenderLeft(page: Page) {
+	return page.evaluate(() => {
+		const jig = document.querySelector('[alt="验证码滑块"]') as HTMLElement | null;
+		const bg = document.querySelector('[alt="验证码背景"]') as HTMLElement | null;
+		if (!jig || !bg) {
+			return 0;
+		}
+		return jig.getBoundingClientRect().left - bg.getBoundingClientRect().left;
+	});
+}
+
+/** 是否未通过验证 */
 async function isNotVerified(page: Page) {
 	await page.waitForTimeout(2000);
 
 	const errors = await page.evaluate(() =>
 		Array.from(document.querySelectorAll('.el-form-item__error, .el-message__content'))
-			.map((e) => (e.textContent || '').trim())
-			.filter(Boolean)
+			.map((e) => e.textContent || '')
+			// 过滤登录成功等提示
+			.filter((text) => text && !text.includes('成功'))
 	);
 
 	if (errors.length) {
 		throw new Error(errors.join('\n'));
 	}
 
-	return page.url().includes(LOGIN_PAGE_HOST);
+	return page.url().includes('login.zhihuishu.com');
 }
 
-/**
- * 是否未登录；未登录时顺带把登录中心的表单等出来。
- *
- * ⚠️ 不能只看首页的「登录 / 注册」入口（`#notLogin`）：那只是 UI 状态，
- * 会话失效时首页**仍会显示成已登录**（用户信息是缓存的）。
- * 只看它会误判「不用登录」，而用户点进「我的课程」被踢回登录页时，脚本早就跑完了——
- * 表现就是「浏览器重开后看着是登录着的，一进课程又要登录，还没人自动填」。
- *
- * 所以走真实路径：直接访问必须有登录态才能进的「我的课程」页，被重定向到
- * login.zhihuishu.com 就说明没登录。
- */
-async function isNotLogin(page: Page, notify?: (message: string) => void) {
-	await page.goto(COURSE_PAGE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
-	await waitForUrlSettle(page, LOGIN_PAGE_HOST);
-
-	if (page.url().includes(LOGIN_PAGE_HOST)) {
-		await waitForLoginForm(page);
-		return true;
-	}
-
-	// 稳稳落在课程页上＝登录态有效
-	if (page.url().includes(COURSE_PAGE_HOST)) {
-		notify?.('智慧树：登录态有效（能打开「我的课程」），跳过登录');
-		return false;
-	}
-
-	// 既不是课程页也不是登录中心：多半是站点又改版了。
-	// 退回首页入口判断（旧逻辑）——那套对「会话失效」不灵，但总比让脚本静默不干活强，
-	// 同时在日志里留一条，方便从远程日志接口看到。
-	notify?.('智慧树：「我的课程」地址可能变了，已退回首页判断登录态（结果可能不准）');
-	return await isNotLoginByHomepage(page);
-}
-
-/**
- * 等跳转稳定下来。
- *
- * 「我的课程」不是同步重定向：页面先正常打开，过一会儿才由 JS 跳去登录中心。
- * 踩过的坑：访问后固定等 2 秒再读 URL，那时还停在课程页上，于是被判成「已登录」直接跳过，
- * 用户点进课程被踢回登录页时才发现没人填。
- *
- * 这里等到 URL 出现目标 host，或者连续 3 秒没再变（视作跳转结束），最多等 30 秒。
- */
-async function waitForUrlSettle(page: Page, untilHost: string) {
-	const deadline = Date.now() + 30 * 1000;
-	let last = page.url();
-	let stableSince = Date.now();
-
-	while (Date.now() < deadline) {
-		if (page.url().includes(untilHost)) {
-			return;
-		}
-		if (page.url() !== last) {
-			last = page.url();
-			stableSince = Date.now();
-		} else if (Date.now() - stableSince > 3000) {
-			return;
-		}
-		await page.waitForTimeout(300);
-	}
-}
-
-/** 点开登录中心并把表单等出来（表单没出现就 fill，会直接超时） */
-async function waitForLoginForm(page: Page) {
-	await page.waitForSelector('input[name="mobile"], #tab-2', { timeout: 60 * 1000 });
+async function isNotLogin(page: Page) {
+	// domcontentloaded + 显式 15s 超时：弱网下默认 load/30s 上限会显著拖慢登录前置检查
+	await page.goto('https://www.zhihuishu.com/', { waitUntil: 'domcontentloaded', timeout: 15 * 1000 }).catch(() => {});
 	await page.waitForTimeout(2000);
-}
-
-/** 旧的判断方式：首页上「登录 / 注册」入口可见即未登录。仅作为兜底 */
-async function isNotLoginByHomepage(page: Page) {
-	await page.goto('https://www.zhihuishu.com/', { waitUntil: 'domcontentloaded' });
-	await page.waitForTimeout(2000);
-
-	const notLogin = await page.evaluate(() => {
-		const el = document.querySelector('#notLogin') as HTMLElement | null;
-		return !!el && getComputedStyle(el).display !== 'none' && el.offsetParent !== null;
-	});
-
-	if (notLogin) {
-		await page.click('#notLogin');
-		await waitForLoginForm(page);
+	// #login 为已登录用户信息区域，未登录时会隐藏
+	const loginBtnNotDisplay = await page.evaluate(
+		() => (document.querySelector('#login') as HTMLElement)?.style.display === 'none'
+	);
+	if (loginBtnNotDisplay) {
+		// 点击 登录/注册 入口，跳转到登录中心
+		await page.click('#notLogin a');
+		try {
+			await page.waitForURL(/login\.zhihuishu\.com/, { timeout: 10_000 });
+		} catch {
+			// 跳转超时兜底，继续后续流程
+		}
+		await page.waitForTimeout(1000);
 	}
 
-	return notLogin;
-}
-
-/**
- * 勾选「我已阅读并同意《智慧树用户协议》《隐私政策》…」
- *
- * 原生 checkbox 被 Element Plus 隐藏，Playwright 的 check() 会因为元素不可见而超时，
- * 只能直接对它派发原生 click；先看当前状态，避免把已勾选的又点掉。
- */
-async function acceptPrivacy(page: Page) {
-	await page.evaluate((selector) => {
-		const input = document.querySelector(selector) as HTMLInputElement | null;
-		if (input && !input.checked) {
-			input.click();
-		}
-	}, PRIVACY_CHECKBOX_SELECTOR);
+	return loginBtnNotDisplay;
 }

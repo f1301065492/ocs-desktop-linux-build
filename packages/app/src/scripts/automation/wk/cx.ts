@@ -1,22 +1,43 @@
 import type { Page } from 'playwright-core';
-import { breakSliderVerify, breakVerifyCode, getBase64, slowType } from '../../utils';
-import { AutomationScript } from '../../script';
+import { breakSliderVerify, breakVerifyCode, ensureWideViewport, getBase64, slowType } from '../../utils';
+import { AutomationScript } from '@ocs-desktop/common';
 
-export const CXUnitLoginScript = new AutomationScript(
+export const CXLoginScript = new AutomationScript(
 	{
+		loginType: {
+			label: '登录方式',
+			value: 'phone',
+			type: 'select',
+			options: [
+				{ label: '手机密码登录', value: 'phone' },
+				{ label: '学校机构登录', value: 'unit' }
+			]
+		},
+		phone: {
+			label: '手机号',
+			value: '',
+			type: 'text',
+			required: true,
+			placeholder: '请输入手机号',
+			pattern: '^1[3-9]\\d{9}$',
+			patternMessage: '手机号格式不正确',
+			visibleWhen: { key: 'loginType', value: 'phone' }
+		},
 		unit: {
 			label: '学校/单位',
 			value: '',
 			type: 'text',
 			required: true,
-			placeholder: '请输入学校/单位名称'
+			placeholder: '请输入学校/单位名称',
+			visibleWhen: { key: 'loginType', value: 'unit' }
 		},
 		id: {
 			label: '学号/工号',
 			value: '',
 			type: 'text',
 			required: true,
-			placeholder: '请输入学号/工号'
+			placeholder: '请输入学号/工号',
+			visibleWhen: { key: 'loginType', value: 'unit' }
 		},
 		password: {
 			label: '密码',
@@ -27,7 +48,7 @@ export const CXUnitLoginScript = new AutomationScript(
 		}
 	},
 	{
-		name: '超星-学校机构登录',
+		name: '超星-自动登录',
 		icon: 'https://www.chaoxing.com/',
 		async run(
 			page,
@@ -40,74 +61,41 @@ export const CXUnitLoginScript = new AutomationScript(
 			}
 		) {
 			try {
+				// 登录页为固定宽度桌面布局，窄视口下元素会被裁出可视区，先确保窗口足够宽再导航
+				await ensureWideViewport(page);
 				if (await isNotLogin(page)) {
-					CXUnitLoginScript.emit('script-data', '超星：开始登录（学校 / 机构）');
-					/** 其他登录 */
-					await Promise.all([page.waitForLoadState('networkidle'), page.click('#otherlogin')]);
-					await page.waitForTimeout(3000);
-					/** 输入机构名, 并等待搜索结果 */
-					await slowType(page, '#inputunitname', configs.unit);
-					await page.waitForTimeout(2000);
-					/** 点击第一个结果 */
-					await page.click('.filter-list > ul > li');
-					await page.fill('#uname', configs.id);
-					await page.fill('#password', configs.password);
+					if (configs.loginType === 'unit') {
+						/** 其他登录（domcontentloaded + 显式 15s 超时：networkidle 默认 30s 且弱网/长连接页面几乎必然等满） */
+						await Promise.all([
+							page.waitForLoadState('domcontentloaded', { timeout: 15 * 1000 }).catch(() => {}),
+							page.click('#otherlogin')
+						]);
+						await page.waitForTimeout(3000);
+						/** 输入机构名, 并等待搜索结果 */
+						await slowType(page, '#inputunitname', configs.unit);
+						await page.waitForTimeout(2000);
+						/** 点击第一个结果 */
+						await page.click('.filter-list > ul > li');
+						await page.fill('#uname', configs.id);
+						await page.fill('#password', configs.password);
 
-					await login(page, (message) => CXUnitLoginScript.emit('script-data', message), options);
+						await login(page, options);
+					} else {
+						await page.fill('#phone', configs.phone);
+						await page.fill('#pwd', configs.password);
+
+						await login(page);
+					}
 				}
 			} catch (err) {
-				CXUnitLoginScript.emit('script-error', String(err));
+				CXLoginScript.emit('script-error', String(err));
 			}
 		}
 	}
 );
 
-export const CXPhoneLoginScript = new AutomationScript(
-	{
-		phone: {
-			label: '手机号',
-			value: '',
-			type: 'text',
-			required: true,
-			placeholder: '请输入手机号'
-		},
-		password: {
-			label: '密码',
-			value: '',
-			type: 'password',
-			required: true,
-			placeholder: '请输入密码'
-		}
-	},
-	{
-		name: '超星-手机密码登录',
-		icon: 'https://www.chaoxing.com/',
-		async run(page, configs) {
-			try {
-				if (await isNotLogin(page)) {
-					CXPhoneLoginScript.emit('script-data', '超星：开始手机密码登录');
-					await page.fill('#phone', configs.phone);
-					await page.fill('#pwd', configs.password);
-
-					await login(page, (message) => CXPhoneLoginScript.emit('script-data', message));
-				}
-			} catch (err) {
-				CXPhoneLoginScript.emit('script-error', String(err));
-			}
-		}
-	}
-);
-
-/**
- * 提交登录并等待结果。
- *
- * notify 用来上报关键事件（最终进 `script-data` → 软件日志 / 远程 API 的日志接口）：
- * 超星是唯一会连续重试 5 次的站点，调用方只靠最终成败看不出「现在卡在验证码」。
- * 这里收一个回调而不是整个脚本实例，是为了不和 AutomationScript 的泛型参数较劲。
- */
 function login(
 	page: Page,
-	notify: (message: string) => void,
 	opts?: {
 		ocrApiUrl?: string;
 		ocrApiImageKey?: string;
@@ -116,23 +104,11 @@ function login(
 	}
 ) {
 	return new Promise<void>((resolve, reject) => {
-		/** 每类验证码只提示一次，否则重试 5 次就刷 5 条 */
-		const notified = { image: false, slider: false };
-		const notifyCaptcha = (kind: 'image' | 'slider', canAuto: boolean) => {
-			if (notified[kind]) {
-				return;
-			}
-			notified[kind] = true;
-			const label = kind === 'image' ? '图片验证码' : '滑块验证码';
-			notify(`超星：检测到${label}，${canAuto ? '尝试自动识别' : '需要人工处理'}`);
-		};
-
 		// 监听登录状态
 		const listenerLogin = (page: Page) => {
 			// 登录成功
 			if (page.url().includes('/space/index') || page.url().includes('/base')) {
 				page.off('load', listenerLogin);
-				notify('超星：登录成功');
 				resolve();
 			}
 		};
@@ -151,7 +127,6 @@ function login(
 			const area = await page.$('#numVerCode');
 			const codeInput = await page.$('#vercode');
 			if (area && codeInput) {
-				notifyCaptcha('image', Boolean(opts?.ocrApiUrl && opts?.ocrApiImageKey));
 				/** 破解验证码 */
 				if (opts?.ocrApiUrl && opts?.ocrApiImageKey && area) {
 					await breakVerifyCode(page, area, codeInput, {
@@ -168,7 +143,6 @@ function login(
 			// 2024年新增-滑块验证码
 			const captchaEl = await page.$('#captcha');
 			if (captchaEl) {
-				notifyCaptcha('slider', Boolean(opts?.ocrApiUrl && opts?.detBackgroundKey && opts?.detTargetKey));
 				// 先登录才会出现验证码
 				if (tryCount === 4) {
 					await page.click('#loginBtn');
@@ -265,7 +239,8 @@ function login(
 
 async function isNotLogin(page: Page) {
 	// 不能使用 https ，这里如果使用 https 在登录后会导致某些同学的课程无法访问
-	await page.goto('http://i.chaoxing.com/');
+	// 显式 15s 超时：弱网下默认 30s 上限会显著拖慢自动登录前置检查
+	await page.goto('http://i.chaoxing.com/', { timeout: 15 * 1000 }).catch(() => {});
 	await page.waitForTimeout(2000);
 
 	return page.url().includes('passport2.chaoxing.com');

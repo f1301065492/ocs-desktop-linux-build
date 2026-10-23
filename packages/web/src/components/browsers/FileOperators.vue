@@ -8,7 +8,6 @@
 				<Icon type="more_horiz"> 更多 </Icon>
 			</a-button>
 			<template #content>
-				<a-doption @click="newFolder"> <Icon type="folder">新建文件夹</Icon> </a-doption>
 				<a-doption @click="state.showAutomationScriptSelector = true">
 					<Icon type="add"> 批量创建-自动化程序浏览器</Icon>
 				</a-doption>
@@ -16,13 +15,21 @@
 			</template>
 		</a-dropdown>
 
-		<a-button
+		<!-- 新建下拉按钮：主按钮点击 = 新建浏览器（初始化弹窗），悬浮展开更多新建入口 -->
+		<a-dropdown-button
 			size="small"
 			type="primary"
+			trigger="hover"
 			@click="newBrowserOrInit()"
+			@select="onCreateSelect"
 		>
-			<Icon type="web"> 新建浏览器 </Icon>
-		</a-button>
+			<Icon type="add"> 新建 </Icon>
+			<template #content>
+				<a-doption value="folder">
+					<Icon type="folder">新建文件夹</Icon>
+				</a-doption>
+			</template>
+		</a-dropdown-button>
 
 		<a-modal
 			v-model:visible="state.showAutomationScriptSelector"
@@ -31,6 +38,7 @@
 			<template #title> 选择模板进行批量创建 </template>
 			<AutomationScriptSelector
 				:automation-scripts="state.automationScripts"
+				style="max-height: 70vh; overflow: overlay"
 				:multiple="false"
 				@confirm="
 					(as) => {
@@ -44,7 +52,6 @@
 
 		<a-modal
 			v-model:visible="state.showAutomationScriptTable"
-			:footer="false"
 			:closable="true"
 			:mask-closable="false"
 			width="auto"
@@ -52,6 +59,7 @@
 			<template #title> 批量创建：{{ state.selectedAS?.name }} </template>
 			<AutomationScriptTable
 				v-if="state.selectedAS"
+				ref="batchCreateTableRef"
 				style="max-width: 800px"
 				:raw-automation-script="state.selectedAS"
 				@cancel="state.showAutomationScriptTable = false"
@@ -61,6 +69,47 @@
 				v-else
 				description="请选择模板"
 			/>
+			<!-- 底部操作固定在 footer，滚动区域过长时按钮不再被隐藏 -->
+			<template #footer>
+				<a-space v-if="batchCreateTableRef">
+					<span> 浏览器名生成规则： </span>
+					<a-select
+						v-model="batchCreateTableRef.state.browserNameFields"
+						size="mini"
+						multiple
+						style="width: 200px; overflow-x: auto; white-space: nowrap"
+					>
+						<template
+							v-for="config of batchCreateTableRef.arrayLikeConfigs"
+							:key="config.key"
+						>
+							<a-option
+								:label="config.label"
+								:value="config.key"
+							></a-option>
+						</template>
+					</a-select>
+
+					<a-tooltip content="导出固定格式的批量创建模板表格，编辑好模板表格后可以导入。">
+						<a-button @click="batchCreateTableRef.exportTemplateExcel">
+							<a-space> <Icon type="download" /> 导出表格模板 </a-space>
+						</a-button>
+					</a-tooltip>
+
+					<a-tooltip content="导入与上面格式相同的表格数据">
+						<a-button @click="batchCreateTableRef.importTemplateExcelConfirm">
+							<a-space> <Icon type="upload" /> 导入表格 </a-space>
+						</a-button>
+					</a-tooltip>
+
+					<a-button
+						type="outline"
+						@click="batchCreateTableRef.onConfirm"
+					>
+						<Icon type="web"> 批量创建 </Icon>
+					</a-button>
+				</a-space>
+			</template>
 		</a-modal>
 
 		<a-modal
@@ -101,7 +150,7 @@
 
 <script setup lang="ts">
 import Icon from '../Icon.vue';
-import { reactive, h } from 'vue';
+import { reactive, h, ref } from 'vue';
 import { RawAutomationScript } from '../automation-scripts';
 import AutomationScriptSelector from '../automation-scripts/AutomationScriptSelector.vue';
 import AutomationScriptTable from '../automation-scripts/AutomationScriptTable.vue';
@@ -110,6 +159,9 @@ import { store } from '../../store';
 import { root } from '../../fs/folder';
 import { Browser } from '../../fs/browser';
 import { Modal, Message, Tag } from '@arco-design/web-vue';
+
+/** 批量创建表格组件引用（footer 插槽按钮经 defineExpose 调用其状态与动作） */
+const batchCreateTableRef = ref<InstanceType<typeof AutomationScriptTable>>();
 
 const state = reactive({
 	showAutomationScriptSelector: false,
@@ -122,6 +174,13 @@ const state = reactive({
 	}
 });
 
+/** 新建下拉按钮的选项分发 */
+function onCreateSelect(value: string | number | Record<string, unknown> | undefined) {
+	if (value === 'folder') {
+		newFolder();
+	}
+}
+
 function showMultipleCreateTable() {
 	state.showAutomationScriptTable = true;
 	state.selectedAS = state.automationScripts[0];
@@ -129,20 +188,23 @@ function showMultipleCreateTable() {
 
 async function multipleCreate(
 	raw: RawAutomationScript,
-	configsList: { browserName: string; configs: RawAutomationScript['configs'] }[]
+	configsList: (RawAutomationScript['configs'] & { browserName: string })[]
 ) {
-	for (const item of configsList) {
+	for (const configs of configsList) {
+		// browserName 是浏览器名而非脚本配置项：剔除后再入库，避免渲染出空 label 的配置输入框
+		const { browserName, ...scriptConfigs } = configs;
 		newBrowser({
-			name: item.browserName,
+			name: browserName,
 			automationScripts: [
 				{
 					name: raw.name,
-					configs: item.configs
+					configs: scriptConfigs
 				}
 			]
 		});
 	}
 
+	Message.success(`成功创建 ${configsList.length} 个浏览器`);
 	state.showAutomationScriptTable = false;
 }
 

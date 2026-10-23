@@ -21,7 +21,7 @@ export const config = reactive({
 		{
 			name: 'index',
 			path: '/',
-			redirect: '/simple',
+			redirect: () => '/browsers',
 			component: shallowRef(page),
 			children: [
 				{
@@ -43,24 +43,6 @@ export const config = reactive({
 					}
 				},
 				{
-					name: 'resources',
-					path: 'resources',
-					component: () => import('@/pages/resources/index.vue'),
-					meta: {
-						icon: 'widgets',
-						title: '应用中心'
-					}
-				},
-				{
-					name: 'dashboard',
-					path: 'dashboard',
-					component: () => import('@/pages/dashboard/index.vue'),
-					meta: {
-						icon: 'image',
-						title: '监控列表'
-					}
-				},
-				{
 					name: 'setting',
 					path: 'setting',
 					component: () => import('@/pages/setting/index.vue'),
@@ -79,16 +61,6 @@ export const config = reactive({
 				icon: 'view_list',
 				title: '书签列表',
 				/** 隐藏在左侧菜单栏 */
-				hideInMenu: true
-			}
-		},
-		{
-			name: 'simple',
-			path: '/simple',
-			component: () => import('@/pages/simple/index.vue'),
-			meta: {
-				icon: 'view_list',
-				title: '简洁模式',
 				hideInMenu: true
 			}
 		}

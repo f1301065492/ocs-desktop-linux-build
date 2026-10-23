@@ -4,7 +4,7 @@
 		:size="4"
 		class="justify-content-end align-items-center browser-operators"
 	>
-		<template v-if="process === undefined || process.status === 'closed'">
+		<template v-if="(process === undefined || process.status === 'closed') && actions.includes('launch')">
 			<a-tooltip
 				:position="tooltipPosition"
 				mini
@@ -22,7 +22,7 @@
 				>
 					<Icon
 						type="play_circle"
-						color="#165dff"
+						color="var(--theme-primary-color)"
 						:class="iconClass"
 					/>
 					<span class="ms-1">启动</span>
@@ -30,8 +30,9 @@
 			</a-tooltip>
 		</template>
 
-		<template v-else-if="process.status === 'launched'">
+		<template v-else-if="process?.status === 'launched'">
 			<a-tooltip
+				v-if="actions.includes('front')"
 				content="置顶"
 				:position="tooltipPosition"
 			>
@@ -43,12 +44,13 @@
 					<Icon
 						type="push_pin"
 						:class="iconClass"
-						color="#165dff"
+						color="var(--theme-primary-color)"
 					/>
 				</a-button>
 			</a-tooltip>
 
 			<a-tooltip
+				v-if="actions.includes('relaunch')"
 				content="重启"
 				:position="tooltipPosition"
 			>
@@ -60,12 +62,13 @@
 					<Icon
 						type="sync"
 						:class="iconClass"
-						color="#165dff"
+						color="var(--theme-primary-color)"
 					/>
 				</a-button>
 			</a-tooltip>
 
 			<a-tooltip
+				v-if="actions.includes('close')"
 				content="关闭"
 				:position="tooltipPosition"
 			>
@@ -84,7 +87,7 @@
 		</template>
 
 		<!-- 加载中 -->
-		<template v-else-if="process.status === 'launching' || process.status === 'closing'">
+		<template v-else-if="process?.status === 'launching' || process?.status === 'closing'">
 			<a-button
 				type="text"
 				size="mini"
@@ -108,21 +111,23 @@ import { BrowserOptions } from '../../fs/interface';
 const props = withDefaults(
 	defineProps<{
 		browser: BrowserOptions;
-		tooltipPosition?: 'top' | 'br';
+		tooltipPosition?: 'top' | 'br' | 'bottom';
 		iconClass?: string;
+		actions?: ('launch' | 'front' | 'relaunch' | 'close')[];
 	}>(),
 	{
-		tooltipPosition: 'top',
-		iconClass: 'fs-6'
+		tooltipPosition: 'br',
+		iconClass: 'fs-6',
+		actions: () => ['launch', 'front', 'relaunch', 'close']
 	}
 );
 const instance = Browser.from(props.browser.uid);
-const process = computed(() => Process.from(props.browser.uid));
+// 进程是否运行以其是否仍在响应式 processes 数组中为准：
+// Process.remove 用 splice 移除后，Process.from 仍返回失效引用（status 滞留 'launched'），
+// 用户直接关闭浏览器窗口（非点卡片关闭按钮）时会导致卡片一直显示"置顶"而非"启动"。
+const process = computed(() => Process.fromRunning(props.browser.uid));
 
-/**
- * launch() / relaunch() 会因为前置检查失败（如浏览器路径未配置）而 reject。
- * 模板里的 @click 直接调用会把 rejection 变成未捕获异常，这里统一兜底。
- */
+/** [ocs-ext] 前置检查失败会让 launch() reject，模板直接调用会产生未捕获异常 */
 function safeLaunch() {
 	instance?.launch()?.catch((err) => {
 		console.error('启动失败：', err);

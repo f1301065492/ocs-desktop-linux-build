@@ -14,16 +14,15 @@
 			"dom"
 		],
 		"skipLibCheck": true,
-		"outDir": "./lib",
-		"typeRoots": [
-			"./src/env.d.ts"
-		]
+		"outDir": "./lib"
 	},
 	"exclude": [
 		"app/**/*"
 	],
 	"include": [
 		"src/**/*.ts",
-		"src/**/*.d.ts"
+		"src/**/*.d.ts",
+		"src/**/*.tsx",
+		"src/**/*.vue"
 	]
 }

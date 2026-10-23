@@ -21,12 +21,12 @@
 		<template v-else>
 			<div
 				style="position: sticky; top: 0px; z-index: 99"
-				class="bg-white pb-2"
+				class="bg-white pb-2 ocs-configs-bar"
 			>
 				<a-alert class="mb-2">
 					<span
 						v-html="
-							lang(
+							t(
 								'setting_ocs_sync_notes',
 								'选择不同平台进行脚本设置，然后开启同步即可全浏览器应用相同OCS脚本设置 <br /> 如果只有单个浏览器，则无需配置，直接前往浏览器设置即可。'
 							)
@@ -38,6 +38,7 @@
 					v-model:active-key="Store.render.setting.ocs.currentProjectName"
 					type="card-gutter"
 					hide-content
+					size="small"
 				>
 					<a-tab-pane
 						v-for="project of state.projects
@@ -60,7 +61,9 @@
 <script setup lang="ts">
 import { onMounted, nextTick, onActivated, reactive, watch, ref, WatchStopHandle, onDeactivated } from 'vue';
 import { remote } from '../utils/remote';
-import { store as Store, lang } from '../store/index';
+import { store as Store, t } from '../store/index';
+import { themeState } from '../utils';
+import { OCS_SCRIPT_RESOURCES } from '@ocs-desktop/common/web';
 import type { Project } from 'easy-us';
 
 const props = defineProps<{
@@ -98,6 +101,12 @@ watch(
 	}
 );
 
+/** 主题变化时切换 Shadow DOM 暗色类（无需重渲染列表） */
+watch(
+	() => themeState.dark,
+	(dark) => wrapper?.classList.toggle('ocs-dark', dark)
+);
+
 state.watchStopHandle = watch(store, () => {
 	emits('update:store', store.value);
 });
@@ -105,26 +114,11 @@ state.watchStopHandle = watch(store, () => {
 let wrapper = null as HTMLElement | null;
 let root = null as ShadowRoot | null;
 
-/** 设置手风琴效果：同时只能打开一个 detail */
-function setupAccordion(detailsList: HTMLDetailsElement[]) {
-	for (const details of detailsList) {
-		details.addEventListener('toggle', () => {
-			if (details.open) {
-				for (const other of detailsList) {
-					if (other !== details && other.open) {
-						other.removeAttribute('open');
-					}
-				}
-			}
-		});
-	}
-}
-
 function renderOCS() {
 	if (!root || !wrapper) return;
 	// @ts-ignore
 	const EUS = global.EUS as typeof import('easy-us');
-	const { definedCustomElements, h, $, $ui, $store } = EUS;
+	const { definedCustomElements, h, $, $ui, $store, $modal } = EUS;
 
 	try {
 		const project = state.projects.find((p) => p.name === Store.render.setting.ocs.currentProjectName);
@@ -139,27 +133,46 @@ function renderOCS() {
 		/** 删除阴影 */
 		root.append(h('style', `script-panel-element {box-shadow: none;resize: none;color:#2e2e2e}`));
 
-		/** details / summary 样式 */
+		/** 列表样式 */
 		root.append(
 			h(
 				'style',
 				[
-					'details { margin: 0 0 8px 0; border-radius: 8px; border: 1px solid #e5e6eb; background: #fafafa; overflow: hidden; transition: all 0.2s ease; }',
-					'details:hover { border-color: #c9cdd4; }',
-					'details[open] { border-color: #165dff; background: #fff; box-shadow: 0 2px 12px rgba(22,93,255,0.08); }',
-					'summary { padding: 10px 14px; font-weight: 600; font-size: 13px; color: #1d2129; cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; user-select: none; outline: none; background: transparent; transition: background 0.15s; border-radius: 8px; }',
-					'summary::-webkit-details-marker { display: none; }',
-					'summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid #86909c; border-bottom: 1.5px solid #86909c; transform: rotate(-45deg); transition: transform 0.25s ease, margin-top 0.25s ease; margin-top: -2px; flex-shrink: 0; margin-left: 8px; }',
-					'details[open] > summary::after { transform: rotate(45deg); margin-top: 2px; border-color: #165dff; }',
-					'details[open] > summary { color: #165dff; background: rgba(22,93,255,0.04); }',
-					'summary:hover { background: rgba(0,0,0,0.02); }'
+					'.ocs-list { display: flex; flex-direction: column; gap: 6px; }',
+					'.ocs-list-item { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 10px; border: 1px solid #eceef1; background: #fff; cursor: pointer; user-select: none; transition: all 0.2s ease; }',
+					'.ocs-list-item:hover { border-color: var(--theme-primary-color); box-shadow: 0 4px 14px rgba(var(--primary-6),0.12); transform: translateY(-1px); }',
+					'.ocs-list-item:active { transform: translateY(0); }',
+					'.ocs-list-item-name { flex: 1; font-weight: 600; font-size: 13px; color: #1d2129; }',
+					'.ocs-list-item-arrow { width: 7px; height: 7px; border-right: 2px solid #c9cdd4; border-bottom: 2px solid #c9cdd4; transform: rotate(-45deg); transition: transform 0.2s, border-color 0.2s; flex-shrink: 0; }',
+					'.ocs-list-item:hover .ocs-list-item-arrow { transform: rotate(-45deg) translate(2px, -2px); border-color: var(--theme-primary-color); }',
+					// 暗色模式（通过 shadow host 上的 .ocs-dark 类触发，body[arco-theme] 无法穿透 Shadow DOM）
+					':host(.ocs-dark) .ocs-list-item { background: #2c2c2c; border-color: #4b4848; }',
+					':host(.ocs-dark) .ocs-list-item:hover { border-color: var(--theme-primary-color); box-shadow: 0 4px 14px rgba(0,0,0,0.3); }',
+					':host(.ocs-dark) .ocs-list-item-name { color: #cccccc; }',
+					':host(.ocs-dark) .ocs-list-item-arrow { border-color: #6a6a6a; }'
 				].join('\n')
 			)
 		);
 
+		/** 弹窗内容自适应，最大 800px；隐藏标题（脚本面板自带 header，避免重复） */
+		root.append(
+			h(
+				'style',
+				[
+					'modal-element { width: fit-content !important; max-width: 800px !important; }',
+					'.modal-body { max-width: 800px; }',
+					'.modal-title { display: none; }'
+				].join('\n')
+			)
+		);
+
+		// 根据 当前主题状态切换 shadow host 的暗色类
+		wrapper?.classList.toggle('ocs-dark', themeState.dark);
+
+		const list = h('div', { className: 'ocs-list' });
+
 		if (project) {
-			const detailsList: HTMLDetailsElement[] = [];
-			let i = 0;
+			console.log('[ocsjs project]', project);
 			for (const key in project.scripts) {
 				if (Object.prototype.hasOwnProperty.call(project.scripts, key)) {
 					const script = project.scripts[key];
@@ -176,31 +189,25 @@ function renderOCS() {
 						script.namespace &&
 						// 如果没有配置项，则不显示
 						Object.keys(otherConfigs).filter((k) => otherConfigs[k].label !== undefined).length &&
-						script.hideInPanel !== false
+						!script.hideInPanel
 					) {
-						const details = h('details', { open: i === 0 });
-						const panel = $ui.scriptPanel(script, $store);
-						details.append(h('summary', panel.name || '未知脚本'));
-						details.append(panel);
-						/** 添加到页面中，并执行 onrender 函数 */
-						root.append(details);
-						detailsList.push(details);
-						i++;
-						try {
-							script.onrender?.({ panel, header: h('header-element') });
-						} catch (err) {
-							console.error(err);
-						}
+						const item = h('div', { className: 'ocs-list-item' });
+						item.append(h('span', { className: 'ocs-list-item-name' }, script.name));
+						item.append(h('span', { className: 'ocs-list-item-arrow' }));
+						item.addEventListener('click', () => {
+							const panel = $ui.scriptPanel(script, $store);
+							$modal.simple({ content: panel, maskCloseable: true }, root ?? undefined);
+						});
+						list.append(item);
 					}
 				}
 			}
-
-			/** 初始化手风琴效果 */
-			setupAccordion(detailsList);
-
-			/** 挂载 ocs panel */
-			document.querySelector('#ocs-browser-configs')?.replaceChildren(wrapper);
 		}
+
+		root.append(list);
+
+		/** 挂载 ocs panel */
+		document.querySelector('#ocs-browser-configs')?.replaceChildren(wrapper);
 	} catch (err) {
 		state.err = String(err);
 		console.error(err);
@@ -213,21 +220,21 @@ async function loadOCS() {
 	try {
 		// @ts-ignore
 		if (global.OCS === undefined) {
-			// 加载 OCS
-			const code = await remote.methods.call('get', 'https://cdn.ocsjs.com/index.js');
+			// 加载 OCS（开发者设置中可自定义脚本地址，留空用默认线上地址）
+			const code = await remote.methods.call('get', Store.scriptResources.index || OCS_SCRIPT_RESOURCES.index);
 			await remote.webContents.call('executeJavaScript', code);
 		}
 
 		// @ts-ignore
 		if (global.EUS === undefined) {
-			// 加载 EUS
-			const code = await remote.methods.call('get', 'https://cdn.ocsjs.com/easy-us.js');
+			// 加载 EUS（开发者设置中可自定义脚本地址，留空用默认线上地址）
+			const code = await remote.methods.call('get', Store.scriptResources.easyUs || OCS_SCRIPT_RESOURCES.easyUs);
 			await remote.webContents.call('executeJavaScript', code);
 		}
 
 		if (state.css === '') {
 			// 加载样式
-			state.css = await remote.methods.call('get', 'https://cdn.ocsjs.com/style.css');
+			state.css = await remote.methods.call('get', OCS_SCRIPT_RESOURCES.style);
 		}
 
 		// @ts-ignore
@@ -251,7 +258,9 @@ async function loadOCS() {
 		state.projects = OCS.definedProjects();
 		emits('update:project', state.projects as Project[]);
 		if (!Store.render.setting.ocs.currentProjectName) {
-			Store.render.setting.ocs.currentProjectName = state.projects[0].name;
+			// 默认打开 pin_projects（如「通用」），找不到则回退到首个项目
+			const preferred = state.projects.find((p) => p.name === state.pin_projects);
+			Store.render.setting.ocs.currentProjectName = (preferred || state.projects[0]).name;
 		}
 	} catch (err) {
 		state.err = String(err);
@@ -314,5 +323,23 @@ function resolveCustomElementName<T extends HTMLElement = HTMLElement>(el: { new
 }
 
 .script-panels {
+}
+
+/** 暗色模式：配置栏背景与项目 Tabs 适配 */
+body[arco-theme='dark'] {
+	.ocs-configs-bar {
+		background-color: #2c2c2c !important;
+	}
+
+	:deep(.arco-tabs-card-gutter) .arco-tabs-tab {
+		background-color: #2c2c2c;
+		border-color: #4b4848;
+		color: #cccccc;
+	}
+
+	:deep(.arco-tabs-card-gutter) .arco-tabs-tab-active {
+		background-color: #3b3b3b;
+		color: #ffffffd9;
+	}
 }
 </style>

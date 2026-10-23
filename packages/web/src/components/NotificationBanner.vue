@@ -1,5 +1,6 @@
 <template>
-	<div>
+	<!-- 无数据时不渲染根节点，避免空 div 携带父级 margin 类占据空间 -->
+	<div v-if="visibleBanners.length">
 		<template
 			v-for="(banner, index) in visibleBanners"
 			:key="index"
@@ -22,7 +23,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { getRemoteInfos } from '../utils';
-import type { BannerResource } from '@ocs-desktop/common/src/api';
+import type { BannerResource } from '@ocs-desktop/common/web';
 
 const visibleBanners = ref<BannerResource[]>([]);
 const closedBanners = ref<Set<string>>(new Set());

@@ -1,4 +1,4 @@
-import { h } from 'vue';
+import { h, reactive } from 'vue';
 import { store } from '../store';
 import dayjs from 'dayjs';
 import { Message, Modal } from '@arco-design/web-vue';
@@ -6,7 +6,7 @@ import { remote } from './remote';
 import { notify } from './notify';
 import { electron } from './node';
 import MarkdownText from '../components/MarkdownText.vue';
-import { OCSApi } from '@ocs-desktop/common/src/api';
+import { OCSApi, OCS_API, DEFAULT_SERVER_PORT } from '@ocs-desktop/common/web';
 import axios from 'axios';
 import { Infos } from '@ocs-desktop/common';
 
@@ -138,7 +138,9 @@ export async function fetchRemoteNotify(readAll: boolean) {
  */
 export async function fetchRemoteLangs() {
 	try {
-		const infos = await axios.get('https://cdn.ocsjs.com/api/ocs-app-langs.json?t=' + Date.now(), {
+		// 8s 超时：弱网环境下避免语言文件请求无限挂起
+		const infos = await axios.get(OCS_API.langs + '?t=' + Date.now(), {
+			timeout: 8000,
 			headers: {
 				'content-type': 'application/json'
 			}
@@ -154,6 +156,37 @@ export async function fetchRemoteLangs() {
 }
 
 /**
+ * 弱网探测：3s 内拿不到 CDN 响应即判定弱网，结果缓存 30s（并发调用合并）。
+ * 用于启动前快速降级：弱网时跳过脚本版本检查等非关键外网请求。
+ */
+let _weakNetProbeAt = 0;
+let _weakNetResult = false;
+let _weakNetInflight: Promise<boolean> | undefined;
+export function detectWeakNetwork(): Promise<boolean> {
+	const now = Date.now();
+	if (now - _weakNetProbeAt < 30 * 1000) {
+		return Promise.resolve(_weakNetResult);
+	}
+	if (_weakNetInflight) {
+		return _weakNetInflight;
+	}
+	_weakNetInflight = remote.methods
+		.call('getWithStatus', OCS_API.infos, { timeout: 3000 })
+		.then((res) => !((res?.status ?? 0) > 0))
+		.catch(() => true)
+		.then((weak) => {
+			_weakNetProbeAt = Date.now();
+			_weakNetResult = weak;
+			_weakNetInflight = undefined;
+			if (weak) {
+				console.warn('[net] 网络探测失败（3s 无响应），进入弱网模式');
+			}
+			return weak;
+		});
+	return _weakNetInflight;
+}
+
+/**
  * 获取 infos.json
  */
 let temp_infos: Infos | undefined;
@@ -161,7 +194,8 @@ export async function getRemoteInfos() {
 	if (temp_infos) {
 		return temp_infos;
 	}
-	temp_infos = await OCSApi.getInfos();
+	/** 开发者设置中可覆盖信息接口（测试环境联调），留空用默认 */
+	temp_infos = await OCSApi.getInfos(store.updater?.infosUrl || undefined);
 	return temp_infos;
 }
 
@@ -222,8 +256,7 @@ function installListener(name: string, channel: string, rate: number, chunkLengt
 
 /** 显示关于软件说明 */
 export async function about() {
-	store.render.state.first = false;
-	const guide = await remote.methods.call('get', 'https://cdn.ocsjs.com/articles/app/guide.md');
+	const guide = await remote.methods.call('get', OCS_API.guide);
 	Modal.info({
 		title: '软件使用教程',
 		closable: true,
@@ -244,26 +277,68 @@ export async function about() {
 	});
 }
 
+/** 解析后的主题状态：是否深色 + 系统是否深色。供 Shadow DOM 等无法被 body[arco-theme] 穿透的场景响应深色变化 */
+export const themeState = reactive({ dark: false, systemDark: false });
+
+// 初始化系统深浅色：用主进程 nativeTheme.shouldUseDarkColors（比渲染层 matchMedia 更可靠）
+try {
+	themeState.systemDark = remote.methods.callSync('getSystemDark') as boolean;
+} catch (e) {
+	console.error('读取系统主题失败：' + e);
+}
+
+/** 根据 theme.mode 与系统偏好解析当前是否深色 */
+function resolveDark(): boolean {
+	const mode = store.render.setting.theme.mode;
+	if (mode === 'dark') return true;
+	if (mode === 'light') return false;
+	return themeState.systemDark;
+}
+
+/** 应用主题：同步设置 body 属性与 themeState，异步设置标题栏 */
 export async function changeTheme() {
+	themeState.dark = resolveDark();
+	// 同步设置 body 主题属性，Arco 组件立即响应
+	if (themeState.dark) {
+		document.body.setAttribute('arco-theme', 'dark');
+	} else {
+		document.body.removeAttribute('arco-theme');
+	}
+	// 应用主题颜色：body[theme-color] 驱动 theme.less 中的颜色预设（blue 为默认色，无需设置属性）
+	const themeColor = store.render.setting.theme.color || 'blue';
+	if (themeColor === 'blue') {
+		document.body.removeAttribute('theme-color');
+	} else {
+		document.body.setAttribute('theme-color', themeColor);
+	}
+	// 标题栏颜色需平台判断（macOS 不使用自定义标题栏）
 	const platform = await remote.methods.call('getPlatform');
 	document.body.classList.add('platform-' + platform);
 	if (platform !== 'darwin') {
-		if (store.render.setting.theme.dark) {
-			// 设置为暗黑主题
-			document.body.setAttribute('arco-theme', 'dark');
-			remote.win.call('setTitleBarOverlay', {
-				color: '#2C2C2C',
-				symbolColor: 'white'
-			});
-		} else {
-			// 恢复亮色主题
-			document.body.removeAttribute('arco-theme');
-			remote.win.call('setTitleBarOverlay', {
-				color: '#fff',
-				symbolColor: 'black'
-			});
-		}
+		// height 与窗口创建时的 titleBarOverlay.height 保持一致（32 = --title-height），
+		// 否则主题切换后覆盖层高度被重置，Linux 下控制按钮渲染位置会太靠上
+		// Linux 圆角窗口覆盖层背景始终为透明，避免右上角渲染出不透明直角色块
+		const isLinux = platform === 'linux';
+		remote.win.call(
+			'setTitleBarOverlay',
+			themeState.dark
+				? { color: isLinux ? '#00000000' : '#2C2C2C', symbolColor: 'white', height: 32 }
+				: { color: isLinux ? '#00000000' : '#fff', symbolColor: 'black', height: 32 }
+		);
 	}
+}
+
+/** 初始化系统深浅色偏好监听：auto 模式下系统切换时实时跟随（由主进程 nativeTheme 推送） */
+let themeListenerInited = false;
+export function initThemeSystemListener() {
+	if (themeListenerInited) return;
+	themeListenerInited = true;
+	ipcRenderer.on('system-theme-change', (_e, dark: boolean) => {
+		themeState.systemDark = dark;
+		if (store.render.setting.theme.mode === 'auto') {
+			changeTheme();
+		}
+	});
 }
 
 export function setAutoLaunch() {
@@ -309,6 +384,8 @@ export function goto(link: string) {
 /** 通过本地服务代理加载图标，解决跨域问题 */
 export function iconUrl(url?: string): string {
 	if (!url) return '';
-	const port = 15319;
+	// 端口需与其他位置一致读取 store（原硬编码 15319，改端口后此处会失效）；
+	// store.server 仅存在于软件内环境，导航页运行在被启动的浏览器中时无此字段，需兜底默认端口
+	const port = store.server?.port || DEFAULT_SERVER_PORT;
 	return `http://localhost:${port}/icon?url=${encodeURIComponent(url)}`;
 }

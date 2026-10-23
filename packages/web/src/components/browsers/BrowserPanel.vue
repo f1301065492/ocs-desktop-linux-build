@@ -19,7 +19,7 @@
 			<a-descriptions-item label="备注描述">
 				<a-textarea
 					v-model="instance.notes"
-					placeholder="备注为空~"
+					:placeholder="getDisplayNotes(instance).isAuto ? '留空则显示自动化程序信息' : '备注为空~'"
 					allow-clear
 				/>
 			</a-descriptions-item>
@@ -32,7 +32,7 @@
 				banner
 				title="使用提示"
 				:html="
-					lang(
+					t(
 						'simple_mode_index_automation_script_usage',
 						'启动浏览器后会自动运行 <code>自动程序</code><br />根据不同配置运行例如：自动登录、自动点击等。'
 					)
@@ -238,7 +238,7 @@
 </template>
 
 <script setup lang="ts">
-import { lang, store } from '../../store';
+import { t, store } from '../../store';
 import { Browser } from '../../fs/browser';
 import { datetime } from '../../utils';
 import Tags from '../Tags.vue';
@@ -253,6 +253,7 @@ import XTerm from '../XTerm.vue';
 import { electron } from '../../utils/node';
 import { remote } from '../../utils/remote';
 import UsageAlertCollapse from '../UsageAlertCollapse.vue';
+import { getDisplayNotes } from '../../utils/display-notes';
 
 const props = defineProps<{
 	browser: BrowserOptions;

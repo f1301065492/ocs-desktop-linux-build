@@ -1,8 +1,8 @@
 <template>
+	<!-- 底部操作区已转移至弹窗 footer 插槽（FileOperators.vue），本组件只保留表格滚动区 -->
 	<div
 		ref="tableRef"
 		class="ps-table"
-		:style="{ height: store.render.state.height - 160 + 'px', overflow: 'overlay' }"
 	>
 		<div class="ps-3 pe-3">
 			<a-table
@@ -11,13 +11,29 @@
 				:columns="columns"
 				:data="data"
 				:scroll="{
-					y: store.render.state.height - 280
+					// 表格滚动区最大高度 600px（按钮已移至弹窗 footer，无需预留底部空间）
+					y: Math.min(store.render.state.height - 280, 600)
 				}"
 				@page-change="(page) => (state.pagination.current = page)"
 				@page-size-change="(size) => (state.pagination.pageSize = size)"
 			>
 				<template #index="{ record }">
-					<span class="text-nowrap"> {{ record.index }} </span>
+					<span class="text-nowrap"> {{ record.index + 1 }} </span>
+				</template>
+
+				<!-- select 类型列的表头：列名 + 全列填充选择框 -->
+				<template #data-header="{ column }">
+					<div class="ps-header-cell">
+						<div class="ps-header-title">{{ column.title }}</div>
+						<a-select
+							v-model="state.headerSelectValues[column.dataIndex]"
+							size="mini"
+							allow-clear
+							placeholder="全列填充"
+							:options="selectOptions[column.dataIndex]"
+							@change="(value) => applyHeaderSelect(column.dataIndex, value)"
+						></a-select>
+					</div>
 				</template>
 
 				<template #browserName="{ record, column }">
@@ -35,7 +51,15 @@
 				</template>
 
 				<template #data="{ record, rowIndex, column }">
+					<a-select
+						v-if="selectOptions[column.dataIndex]"
+						v-model="record[column.dataIndex]"
+						size="mini"
+						:options="selectOptions[column.dataIndex]"
+						@change="() => onRecordInput(rowIndex)"
+					></a-select>
 					<a-input
+						v-else
 						v-model="record[column.dataIndex]"
 						size="mini"
 						@input="() => onRecordInput(rowIndex)"
@@ -43,67 +67,17 @@
 				</template>
 			</a-table>
 		</div>
-
-		<div class="mt-3">
-			<div class="float-end">
-				<a-space>
-					<span> 浏览器名生成规则： </span>
-					<a-select
-						v-model="state.browserNameFields"
-						size="mini"
-						multiple
-						style="width: 200px; overflow-x: auto; white-space: nowrap"
-					>
-						<template
-							v-for="config of arrayLikeConfigs"
-							:key="config.key"
-						>
-							<a-option
-								:label="config.label"
-								:value="config.key"
-							></a-option>
-						</template>
-					</a-select>
-
-					<a-tooltip content="导出固定格式的批量创建模板表格，编辑好模板表格后可以导入。">
-						<a-button
-							size="mini"
-							@click="exportTemplateExcel"
-						>
-							<a-space> <icon-file /> 导出表格模板 </a-space>
-						</a-button>
-					</a-tooltip>
-
-					<a-tooltip content="导入与上面格式相同的表格数据">
-						<a-button
-							size="mini"
-							@click="importTemplateExcelConfirm"
-						>
-							<a-space> <icon-file /> 导入表格 </a-space>
-						</a-button>
-					</a-tooltip>
-
-					<a-button
-						size="mini"
-						type="outline"
-						@click="onConfirm"
-					>
-						<Icon type="web"> 批量创建 </Icon>
-					</a-button>
-				</a-space>
-			</div>
-		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, toRefs, onDeactivated, computed, watch, onMounted } from 'vue';
+import { ref, reactive, toRefs, onDeactivated, computed, watch, onMounted, h } from 'vue';
 import { RawAutomationScript } from '.';
-import { Modal, TableColumnData } from '@arco-design/web-vue';
+import { Modal, Message, TableColumnData } from '@arco-design/web-vue';
 import uniqueId from 'lodash/uniqueId';
 import { store } from '../../store';
-import Icon from '../Icon.vue';
-import type { Config } from '@ocs-desktop/app/src/scripts/interface';
+import type { Config } from '@ocs-desktop/common/web';
+import { normalizeUrl } from '@ocs-desktop/common/web';
 import { remote } from '../../utils/remote';
 import xlsx from 'xlsx';
 
@@ -115,19 +89,28 @@ const emits = defineEmits<{
 	(
 		e: 'confirm',
 		raw: RawAutomationScript,
-		configsList: { browserName: string; configs: RawAutomationScript['configs'] }[]
+		configsList: (RawAutomationScript['configs'] & { browserName: string })[]
 	): void;
 	(e: 'cancel'): void;
 }>();
 
 const { rawAutomationScript } = toRefs(props);
 
-/** 将 configs 对象转换成 config 数组 */
+/** 将 configs 对象转换成 config 数组（批量创建模式下每行独立，保留全部可见字段） */
 const arrayLikeConfigs = computed(() =>
 	Object.keys(rawAutomationScript.value.configs)
 		.filter((k) => !rawAutomationScript.value.configs[k].hide)
 		.map((k) => ({ ...rawAutomationScript.value.configs[k], key: k }))
 );
+
+/** 按列 key 收集 select 类型配置的选项（表格内以下拉渲染） */
+const selectOptions = computed<Record<string, Config['options']>>(() => {
+	const map: Record<string, Config['options']> = {};
+	for (const config of arrayLikeConfigs.value) {
+		if (config.type === 'select') map[config.key] = config.options;
+	}
+	return map;
+});
 
 const state = reactive({
 	/** 分页 */
@@ -138,6 +121,8 @@ const state = reactive({
 	},
 	/** 存在数据的行索引 */
 	validDataIndex: new Set<number>(),
+	/** select 类型列的表头"全列填充"当前值（key -> 选中的值） */
+	headerSelectValues: {} as Record<string, any>,
 	/** 浏览器名字生成规则 */
 	browserNameFields: arrayLikeConfigs.value.map((c) => c.key)
 });
@@ -149,6 +134,9 @@ const tableRef = ref();
 watch(rawAutomationScript, () => {
 	data.value = createData();
 	initColumns();
+	// 重置行有效标记与表头全列填充：模板切换后旧索引指向的是新空行，残留会导致创建出空数据浏览器
+	state.validDataIndex = new Set<number>();
+	state.headerSelectValues = {};
 	state.browserNameFields = arrayLikeConfigs.value.map((c) => c.key);
 });
 
@@ -158,6 +146,8 @@ onMounted(() => {
 
 onDeactivated(() => {
 	state.browserNameFields = [];
+	state.validDataIndex = new Set<number>();
+	state.headerSelectValues = {};
 	data.value = [];
 	columns.value = [
 		{
@@ -190,8 +180,24 @@ function initColumns() {
 			title: config.label,
 			dataIndex: config.key,
 			slotName: 'data',
+			// select 类型列在表头额外渲染"全列填充"选择框
+			titleSlotName: config.type === 'select' ? 'data-header' : undefined,
 			bodyCellClass: 'ps-body-cell'
 		});
+	}
+}
+
+/**
+ * 表头"全列填充"：将某 select 列的值应用到表格全部行（不标记行有效，行有效性仍由该行实际输入驱动）。
+ * 清空时移除所有行该列的值。
+ */
+function applyHeaderSelect(key: string, value: any) {
+	for (const row of data.value) {
+		if (value === undefined || value === '') {
+			Reflect.deleteProperty(row, key);
+		} else {
+			row[key] = value;
+		}
 	}
 }
 
@@ -217,32 +223,107 @@ function getValidData() {
 	return validData;
 }
 
+/**
+ * 点击批量创建：先清理/校验输入
+ * - 整行全部数值为空（含浏览器名）：视为无效输入，静默忽略该行
+ * - 行内存在任意一个未填写的配置项：整行视为无效数据，弹警告由用户选择"重新输入"或"忽略无效行、批量创建"
+ */
 function onConfirm() {
 	const validData = getValidData();
 
-	const configsList: { browserName: string; configs: RawAutomationScript['configs'] }[] = [];
+	/** 填写完整的行 */
+	const completeRows: any[] = [];
+	/** 填写不完整的行（行号 + 缺少的配置 label） */
+	const incompleteRows: { index: number; missing: string[] }[] = [];
 
 	for (const obj of validData) {
-		const configs: RawAutomationScript['configs'] = Object.create({});
-		const object: Record<string, any> & { browserName: string } = JSON.parse(JSON.stringify(obj));
+		const missing: string[] = [];
+		let filledCount = 0;
+		for (const config of arrayLikeConfigs.value) {
+			const value = String(obj[config.key] ?? '').trim();
+			if (value) {
+				filledCount++;
+			} else if (!config.visibleWhen || obj[config.visibleWhen.key] === config.visibleWhen.value) {
+				// 条件显示（visibleWhen）且当前行不满足显示条件的配置项不参与必填校验
+				missing.push(config.label);
+			}
+		}
+		const hasBrowserName = !!String(obj.browserName ?? '').trim();
+
+		if (filledCount === 0 && !hasBrowserName) {
+			// 全部数值为空：无效输入，忽略该行
+			continue;
+		} else if (missing.length > 0) {
+			incompleteRows.push({ index: obj.index, missing });
+		} else {
+			completeRows.push(obj);
+		}
+	}
+
+	if (incompleteRows.length > 0) {
+		const lines = incompleteRows
+			.slice(0, 20)
+			.map((r) => `第 ${r.index + 1} 行的数据没有填写完整：缺少 ${r.missing.join('、')} 输入`);
+		if (incompleteRows.length > 20) {
+			lines.push(`... 共 ${incompleteRows.length} 行未填写完整`);
+		}
+		Modal.warning({
+			title: '存在未填写完整的数据',
+			content: () =>
+				h('div', { style: 'white-space: pre-line; max-height: 40vh; overflow: auto' }, [
+					lines.join('\n'),
+					h('br'),
+					'请重新输入，或忽略无效行后继续批量创建。'
+				]),
+			okText: '忽略无效行、批量创建',
+			cancelText: '重新输入',
+			hideCancel: false,
+			onOk: () => emitCreate(completeRows)
+		});
+		return;
+	}
+
+	emitCreate(completeRows);
+}
+
+/** 构建 configsList 并触发创建（browserName 不写入 configs，避免渲染为空 label 配置项） */
+function emitCreate(rows: any[]) {
+	if (rows.length === 0) {
+		Message.warning('没有可创建的有效数据');
+		return;
+	}
+
+	const configsList: (RawAutomationScript['configs'] & { browserName: string })[] = [];
+
+	for (const obj of rows) {
+		const configs: RawAutomationScript['configs'] & { browserName: string } = Object.create({});
+		const object: Record<string, any> = JSON.parse(JSON.stringify(obj));
 
 		Reflect.deleteProperty(object, 'index');
 		Reflect.deleteProperty(object, 'key');
-		// 将 browserName 单独取出，避免它作为 config 条目混入 configs（否则渲染时会出现幽灵输入项）
-		const browserName = object.browserName || '';
+		// browserName 单独提取，不作为脚本配置项（否则渲染端会出现空 label、placeholder 为"输入 undefined"的配置框）
+		const inputBrowserName = String(object.browserName ?? '').trim();
 		Reflect.deleteProperty(object, 'browserName');
 
 		for (const key in object) {
 			if (Object.prototype.hasOwnProperty.call(object, key)) {
+				// url 类型列（如网页链接）自动识别并补全 https:// 前缀
+				const rawConfig = rawAutomationScript.value.configs[key];
+				const value = rawConfig?.type === 'url' ? normalizeUrl(object[key]) : object[key];
 				Reflect.set(configs, key, {
-					hide: !!rawAutomationScript.value.configs[key]?.hide,
-					label: rawAutomationScript.value.configs[key]?.label,
-					value: object[key]
+					hide: !!rawConfig?.hide,
+					label: rawConfig?.label,
+					value
 				} as Config);
 			}
 		}
-		const finalBrowserName = browserName || state.browserNameFields.map((f) => configs[f]?.value || '').join(' ');
-		configsList.push({ browserName: finalBrowserName, configs });
+		// 浏览器名：手动输入 > 自动规则 > 模板名+行号 兜底，保证不会出现空名字的浏览器
+		const autoName = state.browserNameFields
+			.map((f) => String(configs[f]?.value ?? '').trim())
+			.filter(Boolean)
+			.join(' ');
+		configs.browserName = inputBrowserName || autoName || `${props.rawAutomationScript.name}-${obj.index + 1}`;
+		configsList.push(configs);
 	}
 
 	emits('confirm', props.rawAutomationScript, configsList);
@@ -280,6 +361,9 @@ function importTemplateExcelConfirm() {
 		importTemplateExcel();
 	}
 }
+
+// 底部操作区经弹窗 footer 插槽渲染（FileOperators.vue），相关状态与动作在此暴露
+defineExpose({ state, arrayLikeConfigs, exportTemplateExcel, importTemplateExcelConfirm, onConfirm });
 
 function importTemplateExcel() {
 	remote.dialog
@@ -344,6 +428,19 @@ function importTemplateExcel() {
 		cursor: default;
 		text-align: center;
 		color: #969696;
+	}
+}
+
+// 表头"全列填充"选择框
+.ps-header-cell {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 2px 0;
+
+	.ps-header-title {
+		font-size: 12px;
+		line-height: 1.4;
 	}
 }
 </style>

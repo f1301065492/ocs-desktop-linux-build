@@ -7,6 +7,10 @@
 	},
 	"productName": "OCS Desktop",
 	"asar": false,
+	"directories": {
+		"output": "../../releases"
+	},
+	"compression": "maximum",
 	"extraResources": [
 		{
 			"from": "../../tools/ocs-openclaw",
@@ -15,8 +19,28 @@
 		}
 	],
 	"copyright": "Copyright © 2021 ${author}",
+	"files": [
+		"out/**/*",
+		"public/favicon.png",
+		"public/favicon.icns",
+		"public/favicon.ico",
+		"public/icons/**/*",
+		"package.json",
+		"node_modules/**/*",
+		"!**/*.map",
+		"!node_modules/xlsx/dist/{shim.min,xlsx.core.min,xlsx.extendscript,xlsx.full.min,xlsx,xlsx.min,xlsx.mini.min}.js"
+	],
 	"nsis": {
 		"oneClick": true
+	},
+	"electronLanguages": [
+		"en-US",
+		"en-GB",
+		"zh-CN"
+	],
+	"publish": {
+		"provider": "generic",
+		"url": "https://cdn.ocsjs.com/app/electron-updater/"
 	},
 	"win": {
 		"icon": "public/favicon.png",
@@ -24,14 +48,6 @@
 		"target": [
 			{
 				"target": "nsis"
-			}
-		],
-		"requestedExecutionLevel": "highestAvailable",
-		"extraResources": [
-			{
-				"from": "../../bin/chrome/win-${arch}/",
-				"to": "bin/chrome",
-				"filter": ["**/*.zip"]
 			}
 		]
 	},
@@ -41,13 +57,6 @@
 		"target": [
 			{
 				"target": "dmg"
-			}
-		],
-		"extraResources": [
-			{
-				"from": "../../bin/chrome/mac-${arch}/",
-				"to": "bin/chrome",
-				"filter": ["**/*.zip"]
 			}
 		]
 	},
@@ -64,14 +73,7 @@
 		],
 		"category": "Utility",
 		"maintainer": "enncy <enncyemail@qq.com>",
-		"executableArgs": ["--no-sandbox"],
-		"extraResources": [
-			{
-				"from": "../../bin/chrome/linux-${arch}/",
-				"to": "bin/chrome",
-				"filter": ["**/*.zip"]
-			}
-		]
+		"executableArgs": ["--no-sandbox"]
 	},
 	"deb": {
 		"depends": [

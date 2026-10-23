@@ -1,5 +1,5 @@
 import { h } from 'vue';
-import { Button, Message, Modal } from '@arco-design/web-vue';
+import { Button, Message, Modal, Space } from '@arco-design/web-vue';
 import { IconSync } from '@arco-design/web-vue/es/icon';
 import { size, sleep } from '.';
 import { remote } from './remote';
@@ -10,8 +10,8 @@ import { Folder } from '../fs/folder';
 import { Browser } from '../fs/browser';
 import { Entity } from '../fs/entity';
 import { currentFolder } from '../fs';
+import type { RawAutomationScript } from '@ocs-desktop/common/web';
 import { Tag, BrowserRemoteMeta } from '../fs/interface';
-import { RawAutomationScript } from '@ocs-desktop/app/lib/src/tasks/remote.register';
 import { resetSearch } from './entity';
 const { shell } = electron;
 
@@ -74,12 +74,10 @@ export function newFolder() {
 /**
  * [ocs-ext] 新建浏览器（唯一工厂）。
  *
- * 新增的可选参数全部服务于远程 API，不传时行为与改造前完全一致：
- * - parentUid：目标文件夹。**远程调用必须显式传**，因为缺省值 currentFolder.value
- *   派生自 store.render.browser.currentFolderUid，那是用户在 UI 里当前选中的文件夹，
- *   不传就会把浏览器创建到用户碰巧打开的目录里
- * - uid：指定实体 id（远程 API 需要在创建前就把 uid 传给调用方）
- * - silent：远程创建时跳过所有 UI 副作用（搜索重置、错误弹窗、进入重命名态）
+ * 新增的可选参数全部服务于远程 API，不传时行为与改造前一致：
+ * - parentUid：目标文件夹（远程调用必须显式传，避免落到用户当前选中的目录）
+ * - uid：指定实体 id（远程 API 需要在创建前就把 uid 返回给调用方）
+ * - silent：远程创建时跳过 UI 副作用（搜索重置、错误弹窗、进入重命名态）
  */
 export function newBrowser(opts?: {
 	name?: string;
@@ -101,8 +99,7 @@ export function newBrowser(opts?: {
 		return;
 	}
 
-	// 解析目标文件夹。Folder.from 在找不到时会返回 undefined，
-	// 此时退回当前文件夹（保持旧的默认行为）
+	// 解析目标文件夹。Folder.from 找不到时退回当前文件夹（保持旧的默认行为）
 	let targetFolder = currentFolder.value;
 	if (opts?.parentUid) {
 		const found = Folder.from(opts.parentUid) as Folder | undefined;
@@ -152,22 +149,11 @@ export function newBrowser(opts?: {
 }
 
 /**
- * 新建浏览器（或触发自动初始化）
- *
- * 当「新建浏览器自动初始化」开关开启时，不直接创建浏览器，
- * 而是打开「新建浏览器自动初始化」弹窗并自动执行初始化流程（新建浏览器 + 添加自动化程序）。
- * 关闭时退化为直接调用 newBrowser。
+ * 新建浏览器：打开「新建浏览器自动初始化」弹窗并自动执行初始化流程（新建浏览器 + 添加自动化程序）。
+ * 浏览器名称由命名算法自动生成（流程内不再询问），如需自定义可在浏览器列表中重命名。
  */
-export function newBrowserOrInit(opts?: {
-	name: string;
-	automationScripts?: RawAutomationScript[];
-	store?: object;
-}): Browser | undefined {
-	if (store.render.setting.browser.autoInitNewBrowser) {
-		store.render.state.newBrowserSetup = true;
-		return;
-	}
-	return newBrowser(opts);
+export function newBrowserOrInit(): void {
+	store.render.state.newBrowserSetup = true;
 }
 
 export async function checkBrowserCaches() {
@@ -289,44 +275,93 @@ export async function forceClearBrowserCache(title: string, userDataDirsFolder: 
 }
 
 /**
- * @returns 是否同意关闭软件
+ * 强制关闭所有正在运行的浏览器（不弹确认框，仅显示「关闭中」提示）。
+ *
+ * 最久 5 秒后强制退出软件，避免浏览器无法关闭时卡住或重复弹窗。
  */
-export async function closeAllBrowser() {
-	if (processes.length) {
-		return new Promise<boolean>((resolve, reject) => {
-			Modal.warning({
-				content: '还有浏览器正在运行，您确定关闭软件吗？',
-				title: '警告',
-				maskClosable: true,
-				closable: true,
-				alignCenter: true,
-				hideCancel: false,
-				onOk: async () => {
-					const m = Modal.info({
-						content: '正在关闭所有浏览器...',
-						closable: false,
-						maskClosable: false,
-						footer: false
-					});
+export async function forceCloseAllBrowsers() {
+	if (!processes.length) return;
+	const m = Modal.info({
+		content: '正在关闭所有浏览器...',
+		closable: false,
+		maskClosable: false,
+		footer: false
+	});
 
-					// 最久5秒后强制退出软件，避免浏览器无法关闭时卡住或重复弹窗
-					const timeout = setTimeout(() => remote.app.call('exit', 0), 5000);
-					try {
-						for (const process of processes) {
-							await process.close();
-							await sleep(100);
-						}
-					} catch (err) {
-						Message.error(String(err));
-					}
-					clearTimeout(timeout);
-					m.close();
-					resolve(true);
-				},
-				onCancel() {
-					resolve(false);
-				}
-			});
-		});
+	// 最久5秒后强制退出软件，避免浏览器无法关闭时卡住或重复弹窗
+	const timeout = setTimeout(() => remote.methods.call('quitApp', 0), 5000);
+	try {
+		for (const process of processes) {
+			await process.close();
+			await sleep(100);
+		}
+	} catch (err) {
+		Message.error(String(err));
 	}
+	clearTimeout(timeout);
+	m.close();
+}
+
+/**
+ * 关闭所有浏览器。若有正在运行的浏览器，弹窗询问是否关闭。
+ *
+ * @param skipConfirm 是否跳过确认弹窗（调用方已确认过时使用，直接强制关闭）
+ * @returns 是否同意关闭软件（用户取消时返回 false）
+ */
+export async function closeAllBrowser(skipConfirm = false) {
+	if (!processes.length) return true;
+	if (skipConfirm) {
+		await forceCloseAllBrowsers();
+		return true;
+	}
+	return new Promise<boolean>((resolve) => {
+		Modal.warning({
+			content: '还有浏览器正在运行，您确定关闭软件吗？',
+			title: '警告',
+			maskClosable: true,
+			closable: true,
+			alignCenter: true,
+			hideCancel: false,
+			onOk: async () => {
+				await forceCloseAllBrowsers();
+				resolve(true);
+			},
+			onCancel() {
+				resolve(false);
+			}
+		});
+	});
+}
+
+/**
+ * 当「后台运行」未开启且仍有浏览器正在运行时，询问用户如何处理关闭操作。
+ *
+ * @returns 'exit' 关闭并退出 | 'tray' 后台运行 | 'cancel' 取消
+ */
+export function askCloseOrTray() {
+	return new Promise<'exit' | 'tray' | 'cancel'>((resolve) => {
+		let settled = false;
+		let modal: { close: () => void } | null = null;
+		const done = (result: 'exit' | 'tray' | 'cancel') => {
+			if (settled) return;
+			settled = true;
+			modal?.close();
+			resolve(result);
+		};
+		modal = Modal.warning({
+			title: '提示',
+			content: '检测到仍有浏览器正在运行，是否关闭并退出软件？',
+			maskClosable: true,
+			closable: true,
+			alignCenter: true,
+			escToClose: true,
+			onCancel: () => done('cancel'),
+			footer: () =>
+				h(Space, null, [
+					h(Button, { onClick: () => done('cancel') }, '取消'),
+					h(Button, { type: 'primary', onClick: () => done('tray') }, '后台运行'),
+					h(Button, { type: 'primary', status: 'danger', onClick: () => done('exit') }, '关闭并退出')
+				])
+		});
+	});
 }

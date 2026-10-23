@@ -1,29 +1,44 @@
 import { app } from 'electron';
+import path from 'path';
 import { remoteRegister } from './src/tasks/remote.register';
 import { initStore } from './src/tasks/init.store';
 import { autoLaunch } from './src/tasks/auto.launch';
 import { createWindow } from './src/window';
+import { createTray, isAppQuitting } from './src/tray';
 import { globalListenerRegister } from './src/tasks/global.listener';
-import { task } from './src/utils';
+import { isLinuxSandboxUnavailable, task } from './src/utils';
 import { handleError } from './src/tasks/error.handler';
 import { updater } from './src/tasks/updater';
 import { startupServer } from './src/tasks/startup.server';
 import { initChrome } from './src/tasks/init.chrome';
-import { store } from './src/store';
-import { initAesKey } from './src/crypto';
+import { initCrypto } from './src/crypto';
+// [ocs-ext] 扩展服务（远程 API / SSH 隧道）
 import { startExtServices, shutdownExt } from './src/ext/boot';
 
-app.setName('ocs');
+app.setName('OCS Desktop');
+
+// 设置应用用户模型 ID，使 Windows 通知（托盘气泡等）显示应用名 "OCS Desktop" 而非进程名 "Electron"。
+// 打包后与 electron-builder 的 appId（快捷方式 AUMID）保持一致，以正确关联应用图标与名称。
+app.setAppUserModelId(app.isPackaged ? 'ocs.enncy.cn' : 'OCS Desktop');
 
 // 防止软件崩溃以及兼容
-app.commandLine.appendSwitch('no-sandbox');
+// Windows/macOS 维持原有 no-sandbox 行为不变；Linux 仅在沙箱不可用时才追加（见上）
+if (process.platform !== 'linux' || isLinuxSandboxUnavailable()) {
+	app.commandLine.appendSwitch('no-sandbox');
+	app.commandLine.appendSwitch('--no-sandbox');
+}
 app.commandLine.appendSwitch('disable-gpu');
 app.commandLine.appendSwitch('disable-software-rasterizer');
 app.commandLine.appendSwitch('disable-gpu-compositing');
 app.commandLine.appendSwitch('disable-gpu-rasterization');
 app.commandLine.appendSwitch('disable-gpu-sandbox');
-app.commandLine.appendSwitch('--no-sandbox');
 app.disableHardwareAcceleration();
+
+if (process.platform === 'linux') {
+	// Linux 透明窗口（无边框 CSS 圆角）需要显式启用 RGBA visuals，
+	// 否则透明区域按不透明渲染，窗口四角仍是实心直角（Electron 官方要求与 disable-gpu 配合使用）
+	app.commandLine.appendSwitch('enable-transparent-visuals');
+}
 
 /** 获取单进程锁 */
 const gotTheLock = app.requestSingleInstanceLock();
@@ -36,25 +51,18 @@ if (!gotTheLock) {
 /** 启动渲染进程 */
 function bootstrap() {
 	task('OCS启动程序', () =>
-		Promise.all([
-			task('初始化错误处理', () => handleError()),
+		Promise.all([			task('初始化错误处理', () => handleError()),
 			// 密钥初始化必须在 initStore 之前完成（initStore 同步调用 getDecryptedRenderData）
-			task('初始化加密密钥', () => initAesKey()).then(() =>
+			task('初始化加密密钥', () => initCrypto()).then(() =>
 				task('初始化本地设置', async () => {
 					initStore();
 					await task('启动接口服务', () => startupServer());
-					// 扩展能力（远程 API / SSH 隧道）：失败只记日志，不影响主流程
+					// [ocs-ext] 远程 API / SSH 隧道：失败只记日志，不影响主流程
 					await task('启动扩展服务', () => startExtServices());
 				})
 			),
 			task('初始化自动启动', () => autoLaunch()),
 			task('启动渲染进程', async () => {
-				// 设置 webrtc 的影像帧率比例，最高100，太高会造成卡顿，参数默认50
-				app.commandLine.appendSwitch(
-					'webrtc-max-cpu-consumption-percentage',
-					(store.store.app?.video_frame_rate ?? 1).toString()
-				);
-
 				await app.whenReady();
 				const window = createWindow();
 				const relaunched = await task('初始化谷歌浏览器', () => initChrome(window));
@@ -64,16 +72,32 @@ function bootstrap() {
 
 				app.on('quit', (e) => {
 					e.preventDefault();
-					// 交给渲染层去关闭浏览器
+					// 交给渲染层去关闭浏览器；程序化退出走 'quit' 以绕过「隐藏到托盘」
+					// 销毁保护（2.x 4634090 移植）：AppImage 重启链路等场景下窗口可能已销毁
 					if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-						window.webContents.send('close');
+						window.webContents.send(isAppQuitting() ? 'quit' : 'close');
 					}
 				});
 
+				// 渲染层是否已成功加载（close 消息由渲染层响应）
+				let rendererReady = false;
+				window.webContents.on('did-finish-load', () => {
+					rendererReady = true;
+				});
+
 				window.on('close', (e) => {
+					// 渲染层尚未成功加载（如 dev server 未就绪/加载失败）时没有人响应 'close' 消息，
+					// 直接销毁窗口，避免出现白屏且无法关闭的僵尸窗口
+					if (!rendererReady || window.webContents.isCrashed()) {
+						window.destroy();
+						return;
+					}
 					e.preventDefault();
+					// 程序化退出（quitApp / before-quit 标记）-> 'quit'：走完整退出流程（关浏览器 + 存数据）
+					// 用户点击关闭按钮 -> 'close'：交由渲染层按「后台运行」开关决定隐藏到托盘或退出
+					// 销毁保护（2.x 4634090 移植）
 					if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-						window.webContents.send('close');
+						window.webContents.send(isAppQuitting() ? 'quit' : 'close');
 					}
 				});
 
@@ -88,12 +112,18 @@ function bootstrap() {
 
 				task('初始化远程通信模块', () => remoteRegister(window));
 				task('注册app事件监听器', () => globalListenerRegister(window));
+				task('初始化系统托盘', () => createTray(window));
 
-				if (app.isPackaged) {
-					await window.loadFile('./public/index.html');
-				} else {
-					await window.loadURL('http://localhost:3000');
+				// 渲染进程启动时会同步调用 decryptRenderString/saveStore 等加密 IPC，
+				// 必须先确保主密钥就绪（initCrypto 并发幂等，此处等待并行的初始化任务完成），
+				// 否则解密失败会导致渲染端把密文当数据再次加密写回（重复加密），进而引发响应式失效。
+				await initCrypto();
+
+				if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
+					await window.loadURL(process.env.ELECTRON_RENDERER_URL);
 					window.webContents.openDevTools();
+				} else {
+					await window.loadFile(path.join(app.getAppPath(), 'out/renderer/index.html'));
 				}
 
 				// 加载完成显示，解决一系列的显示/黑屏问题
@@ -103,6 +133,9 @@ function bootstrap() {
 	);
 }
 
-/** 退出时清理扩展进程（SSH 隧道），双钩子缺一不可，细节见 ext/boot.ts */
+/**
+ * [ocs-ext] 退出时清理扩展进程（SSH 隧道）。
+ * 双钩子缺一不可：app.exit() 不会触发 before-quit，process.on('exit') 兜底。
+ */
 app.on('before-quit', () => shutdownExt());
 process.on('exit', () => shutdownExt());

@@ -2,9 +2,16 @@
 
 pnpm-lock.yaml
 package-lock.json
-public/
+# public 目录整体忽略（历史静态资源不再维护），
+# 但 electron.builder.json 的图标与 window/tray 运行时所引用的 favicon 必须入库
+public/*
+!public/favicon.png
+!public/favicon.ico
+!public/favicon.icns
+# 托盘/窗口多尺寸图标（scripts/generate-icons.js 生成，运行时引用）
+!public/icons/
+!public/icons/**
 bin/
-tests/
 
 # rollup-plugin-visualizer
 stats.html

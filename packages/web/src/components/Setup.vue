@@ -13,14 +13,24 @@
 		<template #title> {{ props.title }} </template>
 		<a-row :gutter="[24, 24]">
 			<a-col v-if="!Environment.infos.value">
-				<template v-if="Environment.loading">
+				<template v-if="Environment.loading.value">
 					<div class="text-center">
 						<a-spin />
 						<div class="mt-2">正在初始化资源，请稍后...</div>
 					</div>
 				</template>
 				<template v-else>
-					<div class="text-center text-danger">未能获取到远程资源信息，请检查网络后重试，或者稍后手动设置。</div>
+					<div class="text-center">
+						<div class="text-danger">未能获取到远程资源信息，请检查网络后重试，或者稍后手动设置。</div>
+						<a-button
+							class="mt-2"
+							type="primary"
+							size="small"
+							@click="initEnvironment"
+						>
+							重试
+						</a-button>
+					</div>
 				</template>
 			</a-col>
 			<a-col
@@ -128,40 +138,6 @@
 			</a-col>
 		</a-row>
 
-		<!-- 浏览器名称输入弹窗 -->
-		<a-modal
-			v-model:visible="setupState.showBrowserNameInput"
-			:footer="false"
-			unmount-on-close
-			:mask-closable="false"
-			:closable="false"
-		>
-			<template #title> 新建浏览器 </template>
-			<div class="text-secondary mb-2">请输入浏览器名称：</div>
-			<a-input
-				v-model="setupState.browserName"
-				size="small"
-				placeholder="请输入浏览器名称"
-				@press-enter="onBrowserNameConfirm"
-			></a-input>
-			<div class="d-flex justify-content-end mt-2">
-				<a-space>
-					<a-button
-						size="small"
-						@click="skipBrowserNameInput"
-					>
-						跳过
-					</a-button>
-					<a-button
-						type="primary"
-						size="small"
-						@click="onBrowserNameConfirm"
-					>
-						确定
-					</a-button>
-				</a-space>
-			</div>
-		</a-modal>
 
 		<!-- 自动化程序选择弹窗 -->
 		<a-modal
@@ -172,20 +148,23 @@
 			:closable="false"
 		>
 			<template #title> 选择自动化程序 </template>
-			<div class="d-flex justify-content-between align-items-center mb-2">
+			<div class="mb-2">
 				<span style="font-size: 12px">请选择需要添加到新建浏览器的自动化程序</span>
-				<a-button
-					size="mini"
-					type="text"
-					@click="skipScriptSelector"
-				>
-					跳过此步骤
-				</a-button>
 			</div>
 			<AutomationScriptSelector
 				:automation-scripts="[]"
 				@confirm="onSelectorConfirm"
-			></AutomationScriptSelector>
+			>
+				<template #actions>
+					<a-button
+						size="small"
+						type="text"
+						@click="skipScriptSelector"
+					>
+						跳过此步骤
+					</a-button>
+				</template>
+			</AutomationScriptSelector>
 		</a-modal>
 
 		<!-- 自动化程序配置弹窗 -->
@@ -228,20 +207,24 @@
 </template>
 
 <script setup lang="ts">
-import { lang, store } from '../store';
-import { download, sleep } from '../utils';
+import { t, store } from '../store';
+import { sleep } from '../utils';
 import { remote } from '../utils/remote';
 import { reactive, watch, nextTick, onMounted } from 'vue';
 import { Message, Modal } from '@arco-design/web-vue';
 import { installExtensions } from '../utils/extension';
 import { addScriptFromUrl } from '../utils/user-scripts';
-import { child_process } from '../utils/node';
+import { electron } from '../utils/node';
 import { Environment } from '../utils/environment';
 import { getDefaultBrowserName, newBrowser } from '../utils/browser';
 import { Browser } from '../fs/browser';
 import AutomationScriptSelector from './automation-scripts/AutomationScriptSelector.vue';
 import AutomationScriptList from './automation-scripts/AutomationScriptList.vue';
 import type { RawAutomationScript } from './automation-scripts';
+import { useEnvironmentDetect } from '../composables/useEnvironmentDetect';
+import { useResources } from '../composables/useResources';
+const { updateEnvironmentDetect } = useEnvironmentDetect();
+const { refreshFileStatus } = useResources();
 
 type Step = {
 	title: string;
@@ -255,7 +238,7 @@ type Step = {
 const _preset_steps = {
 	show_desc: {
 		title: '等待初始化...',
-		description: lang('setup_modal_notice', ''),
+		description: t('setup_modal_notice', ''),
 		action() {}
 	} as Step,
 	init_env: {
@@ -270,113 +253,53 @@ const _preset_steps = {
 				return;
 			}
 
-			// =========================== 安装新版本 ===========================
-			if (process.platform !== 'win32' && process.platform !== 'darwin') {
-				step.error = lang(
-					'setup_error_un_support_platform_when_auto_download_new_version',
-					'当前系统不支持自动更新软件，请前往官网 https://docs.ocsjs.com \n手动下载最新软件并安装和启动。'
-				);
-				return;
-			}
-
-			const infos = await Environment.getRemoteInfos();
-			console.log(infos);
-			const app_download_url = infos?.versions[0].app_downloads?.[process.platform];
-			if (!app_download_url) {
-				step.error = lang(
-					'setup_error_no_windows_download_url_when_auto_download_new_version',
-					`未找到 ${process.platform} 版本的下载地址，请前往官网 https://docs.ocsjs.com \n手动下载最新软件并安装和启动。`,
-					{ platform: process.platform }
-				);
-				return;
-			}
-
-			const dest = await remote.path.call(
-				'join',
-				store.paths.downloadFolder,
-				app_download_url.split('/').pop() ||
-					(process.platform === 'win32' ? 'ocs-desktop-installer.exe' : 'ocs-desktop-installer.dmg')
-			);
-
-			step.description = lang(
-				'setup_error_auto_download_new_version_when_no_valid_browser',
-				'无可用的浏览器，正在下载并更新软件至最新版本： ' + infos?.versions[0]?.tag,
-				{ version: infos?.versions[0]?.tag || '' }
-			);
+			// =========================== 下载并安装内置浏览器 ===========================
+			// 精简版安装包不再内置浏览器：复用环境初始化流程，从多源（镜像/官方/自建CDN）下载 chrome 二进制并解压配置
+			step.description = '未检测到可用浏览器，将下载并安装内置浏览器。';
 			try {
-				const result = await new Promise<string | boolean | undefined>((resolve, reject) => {
+				await new Promise<void>((resolve, reject) => {
 					Modal.confirm({
-						title: '警告',
-						content: '当前浏览器版本过高，点击确认将自动下载最新版本软件，下载后将有内置浏览器可用。',
+						title: '下载内置浏览器',
+						content:
+							'当前无可用的浏览器，点击确认将从多源下载并安装软件内置浏览器（约 150MB），安装完成后自动配置为默认浏览器。',
 						maskClosable: false,
 						closable: false,
 						cancelText: '取消',
 						okText: '一键下载并安装',
-						onCancel(e) {
-							reject(new Error('用户取消下载，请自行更新，然后配置浏览器路径'));
+						onCancel() {
+							reject(new Error('用户取消下载，请自行在软件设置中配置可用的浏览器路径后重试。'));
 						},
 						async onOk() {
-							const existsSync = await remote.fs.call('existsSync', dest);
-							if (existsSync) {
-								resolve(true);
-								return;
-							}
-
-							step.description += '\n正在下载最新版本软件：' + app_download_url;
-							const fp = await download({
-								name: '最新软件下载',
-								dest: dest,
-								url: app_download_url
-							});
-							step.description += '\n下载完成，即将开始安装，请安装后重新初始化设置。';
-							resolve(fp);
+							resolve();
 						}
 					});
 				});
-				if (result === true) {
-					step.error = '检测到最新软件版本已下载，正在打开安装程序中，请安装后重启软件并初始化设置。';
-					console.log(dest);
-					await new Promise<void>((resolve, reject) => {
-						Modal.confirm({
-							title: '警告',
-							content: step.error || '',
-							maskClosable: false,
-							closable: false,
-							cancelText: '取消',
-							okText: '一键安装',
-							onCancel(e) {
-								reject(new Error('你已取消安装，请自行更新软件或者重新初始化。'));
-							},
-							async onOk() {
-								// 关闭软件
-								step.error = '安装程序已启动，请安装后重启软件并初始化设置。';
-								child_process.execFileSync(`"${dest}"`, { shell: true, windowsHide: false });
-							}
-						});
-					});
-				} else if (typeof result === 'string') {
-					step.description += '\n最新版本软件下载完成，即将启动安装程序...';
-					emits('update:visible', false);
-					await new Promise<void>((resolve, reject) => {
-						Modal.info({
-							title: '提示',
-							content: '最新版本软件下载完成，点击确定启动安装程序，请安装后重新初始化设置。',
-							maskClosable: false,
-							closable: false,
-							okText: '确认安装',
-							onOk(e) {
-								// 关闭软件
-								step.error = '安装程序已启动，请安装后重启软件并初始化设置。';
-								child_process.execFileSync(`"${result}"`, { shell: true, windowsHide: false });
-							}
-						});
-					});
-				} else {
-					throw new Error('未知错误，请稍后重试，或者手动更新软件');
+			} catch (error) {
+				step.error = String(error);
+				return;
+			}
+
+			// 监听主进程推送的安装进度，实时刷新步骤描述
+			const progressHandler = (_e: any, progress: { message?: string }) => {
+				if (progress?.message) {
+					step.description = progress.message;
 				}
+			};
+			electron.ipcRenderer.on('builtin-chrome-install-progress', progressHandler);
+			try {
+				step.description = '正在准备下载内置浏览器...';
+				const executablePath: string = await remote.methods.call('installBuiltinChrome');
+				// 安装完成：设置为默认浏览器路径并刷新环境检测
+				store.render.setting.launchOptions.executablePath = executablePath;
+				step.description = `内置浏览器安装完成，已设置为默认浏览器：\n${executablePath}`;
 			} catch (error) {
 				console.error(error);
-				step.error = String(error);
+				step.error =
+					'内置浏览器下载/安装失败：' +
+					String(error) +
+					'\n\n请检查网络连接后重试；若仍无法下载，请前往官方网站找到软件交流群并加入，联系管理员。';
+			} finally {
+				electron.ipcRenderer.removeListener('builtin-chrome-install-progress', progressHandler);
 			}
 		}
 	} as Step,
@@ -398,14 +321,15 @@ const _preset_steps = {
 					force_install: true
 				});
 				if (!default_extension_filepath) {
-					step.error = '脚本管理器安装失败，请稍后重试，或者稍后在左侧应用中心手动安装。';
+					step.error = '脚本管理器安装失败，请稍后重试，或者稍后在软件设置-应用设置手动安装。';
 					return;
 				}
 				step.description += `\n已安装脚本管理器：${default_extension.name} - ${default_extension.url}`;
 			};
 
-			// 如果全部都没安装则安装第一个
-			if (!extensions.every((ext) => ext.installed)) {
+			// 仅当全部都没安装时才安装第一个（原误判为 every：任一未安装就把所有拓展全部重装，
+			// 导致已装脚本猫的用户在初始化/修复时被额外安装篡改猴，安装中断还会留下空目录残留）
+			if (!extensions.some((ext) => ext.installed)) {
 				return install_new();
 			}
 			// 如果版本不支持
@@ -413,7 +337,7 @@ const _preset_steps = {
 
 			// 检查是否为 MV2 拓展，如果是则报错
 			if (!supported_extension) {
-				step.description = lang(
+				step.description = t(
 					'setup_error_auto_download_new_extension_when_version_too_low',
 					'当前脚本管理器版本较低，需要更新拓展到最新MV3版本'
 				);
@@ -427,7 +351,7 @@ const _preset_steps = {
 							cancelText: '取消',
 							okText: '一键更新',
 							onCancel(e) {
-								reject(new Error('你已取消更新，请自行在左侧应用中心更新拓展或者重新初始化。'));
+								reject(new Error('你已取消更新，请自行在软件设置-应用设置更新拓展或者重新初始化。'));
 							},
 							async onOk() {
 								await install_new();
@@ -448,12 +372,15 @@ const _preset_steps = {
 		title: '新建浏览器',
 		async action(step) {
 			await sleep(500);
-			step.description = '请输入浏览器名称...';
-			// 弹出名称输入弹窗，默认值来自 newBrowser 的命名生成算法
-			const name = await onInputBrowserName();
+			// 不再询问命名，直接使用命名算法生成的默认名（可在浏览器列表中重命名）
+			const name = getDefaultBrowserName();
 			step.description = `正在创建浏览器：${name}...`;
 
 			const browser = newBrowser({ name });
+			if (browser) {
+				// 自动命名的浏览器不进入重命名状态（否则卡片标题会显示为空的输入框而非名称）
+				browser.renaming = false;
+			}
 			if (!browser) {
 				step.error = '浏览器创建失败，请确保已在左侧软件设置中配置浏览器路径。';
 				return;
@@ -496,8 +423,17 @@ const _preset_steps = {
 			await addScriptFromUrl(default_user_script.url);
 			step.description = `已安装用户脚本：${default_user_script.name} - ${default_user_script.url}`;
 		}
+	} as Step,
+	update_env: {
+		title: '更新环境',
+		async action() {
+			await updateEnvironmentDetect();
+			refreshFileStatus();
+		}
 	} as Step
 };
+
+export type PresetSteps = (keyof typeof _preset_steps)[];
 
 const props = withDefaults(
 	defineProps<{
@@ -506,7 +442,7 @@ const props = withDefaults(
 		cancelText?: string;
 		title?: string;
 		autoSetup?: boolean;
-		presetSteps?: (keyof typeof _preset_steps)[];
+		presetSteps?: PresetSteps;
 	}>(),
 	{
 		visible: false,
@@ -535,9 +471,6 @@ const state = reactive({
 const setupState = reactive({
 	showScriptSelector: false,
 	showScriptConfig: false,
-	showBrowserNameInput: false,
-	/** 浏览器名称输入弹窗的当前值 */
-	browserName: '',
 	/** 用户已选中的自动化程序（用于配置弹窗编辑） */
 	configScripts: [] as RawAutomationScript[],
 	/** 新建的浏览器实例 */
@@ -547,33 +480,6 @@ const setupState = reactive({
 /** 弹窗的 Promise resolve 回调（非响应式，无需放入 reactive） */
 let selectorResolver: ((v: RawAutomationScript[] | null) => void) | null = null;
 let configResolver: ((v: RawAutomationScript[] | null) => void) | null = null;
-let browserNameResolver: ((v: string) => void) | null = null;
-
-/** 弹出浏览器名称输入弹窗，默认值为命名算法生成的默认名；返回用户确认的名称（跳过则返回默认名） */
-function onInputBrowserName(): Promise<string> {
-	setupState.browserName = getDefaultBrowserName();
-	return new Promise((resolve) => {
-		browserNameResolver = resolve;
-		setupState.showBrowserNameInput = true;
-	});
-}
-
-function onBrowserNameConfirm() {
-	const name = setupState.browserName.trim() || getDefaultBrowserName();
-	setupState.showBrowserNameInput = false;
-	if (browserNameResolver) {
-		browserNameResolver(name);
-		browserNameResolver = null;
-	}
-}
-
-function skipBrowserNameInput() {
-	setupState.showBrowserNameInput = false;
-	if (browserNameResolver) {
-		browserNameResolver(getDefaultBrowserName());
-		browserNameResolver = null;
-	}
-}
 
 /** 弹出自动化程序选择弹窗，返回用户选择的脚本（跳过/未选时返回 null） */
 function openScriptSelector(): Promise<RawAutomationScript[] | null> {
@@ -629,26 +535,29 @@ const emits = defineEmits<{
 	(e: 'update:visible', data: any): void;
 }>();
 
+/** 初始化远程资源并（按需）自动执行初始化流程；资源加载失败时仅展示错误与重试入口 */
+async function initEnvironment() {
+	await Environment.init();
+	prepare();
+	// 远程资源未加载成功时不自动执行，避免后续步骤因缺少资源信息而报错
+	if (props.autoSetup && Environment.infos.value) {
+		setup();
+	}
+}
+
 onMounted(() => {
-	nextTick(async () => {
-		await Environment.init();
-		prepare();
-		if (props.autoSetup) {
-			setup();
-		}
-	});
+	// 弹窗不可见时不执行，避免后台幽灵实例挂起并污染共享步骤状态
+	if (props.visible) {
+		nextTick(initEnvironment);
+	}
 });
 
 watch(
 	() => props.visible,
 	(vis) => {
-		nextTick(async () => {
-			await Environment.init();
-			prepare();
-			if (props.autoSetup) {
-				setup();
-			}
-		});
+		// 仅在打开弹窗时执行，关闭时不应在后台重跑初始化流程
+		if (!vis) return;
+		nextTick(initEnvironment);
 	}
 );
 
@@ -658,8 +567,6 @@ function prepare() {
 	state.finish_animate = false;
 	setupState.showScriptSelector = false;
 	setupState.showScriptConfig = false;
-	setupState.showBrowserNameInput = false;
-	setupState.browserName = '';
 	setupState.configScripts = [] as RawAutomationScript[];
 	setupState.newBrowserInstance = null as Browser | null;
 
@@ -702,7 +609,7 @@ async function setup() {
 				title: '初始化完成',
 				status: 'finish',
 				async action(step) {
-					step.description = lang('setup_finish_notice', '');
+					step.description = t('setup_finish_notice', '');
 				}
 			});
 			state.current_step += 1;

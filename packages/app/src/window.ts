@@ -1,11 +1,30 @@
 // @ts-check
-import { BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, nativeImage, shell } from 'electron';
 import path from 'path';
+import url from 'url';
+import { store } from './store';
+import { DEFAULT_SERVER_PORT } from '@ocs-desktop/common';
+
+/**
+ * 窗口图标路径：
+ * Linux 对 .ico 支持差（任务栏/dock 缩放锯齿），使用 256px PNG；
+ * Windows 使用 .ico；macOS 窗口图标由系统 Dock/包内 icns 负责。
+ */
+function windowIconPath() {
+	return process.platform === 'linux'
+		? path.resolve('./public/icons/256.png')
+		: path.resolve('./public/favicon.ico');
+}
 
 export function createWindow() {
+	if (process.platform === 'darwin' && !app.isPackaged) {
+		// 开发模式下 macOS Dock 默认显示 Electron 图标，替换为应用图标
+		app.dock?.setIcon(nativeImage.createFromPath(path.resolve('./public/icons/512.png')));
+	}
+
 	const win = new BrowserWindow({
 		title: 'ocs',
-		icon: path.resolve('./public/favicon.ico'),
+		icon: windowIconPath(),
 		minWidth: 700,
 		minHeight: 400,
 		width: 900,
@@ -15,10 +34,19 @@ export function createWindow() {
 		autoHideMenuBar: true,
 		titleBarStyle: 'hidden',
 		titleBarOverlay: {
-			color: 'white',
-			symbolColor: 'black'
+			// Linux 圆角窗口：覆盖层背景设为透明，避免右上角控制区域的不透明矩形
+			// 在圆角处渲染出直角色块（按钮本身仍由 Chromium 正常绘制）
+			color: process.platform === 'linux' ? '#00000000' : 'white',
+			symbolColor: 'black',
+			// 显式指定覆盖层高度（与渲染端 --title-height 一致），
+			// 否则 Linux 下系统控制按钮（最小化/最大化/关闭）默认高度偏小，渲染位置太靠上
+			height: 32
 		},
 		frame: false,
+		// Linux 无边框窗口系统不提供原生圆角（Win11/macOS 由系统绘制），
+		// 使用透明窗口 + 渲染端 CSS 圆角实现，需配合主进程入口的 enable-transparent-visuals 开关
+		transparent: process.platform === 'linux',
+		backgroundColor: process.platform === 'linux' ? '#00000000' : undefined,
 		show: false,
 		webPreferences: {
 			zoomFactor: 1,
@@ -46,6 +74,54 @@ export function createWindow() {
 			action: 'deny'
 		};
 	});
+
+	return win;
+}
+
+/**
+ * 创建应用启动初始化期间的透明闪屏窗口。
+ *
+ * 仅在内置 Chrome 需要解压（首次运行）时由 initChrome 创建并显示，
+ * 加载独立的 public/loading.html（不依赖 web/Vue 项目），背景透明、只显示一个 loading 弹窗。
+ * 进度文案由 loading.html 内轮询 /api/init/status 拉取，端口通过 query 注入。
+ */
+export function createLoadingWindow(): BrowserWindow {
+	const win = new BrowserWindow({
+		title: 'ocs-loading',
+		icon: windowIconPath(),
+		width: 480,
+		height: 360,
+		center: true,
+		frame: false,
+		transparent: true,
+		hasShadow: false,
+		resizable: false,
+		minimizable: false,
+		maximizable: false,
+		fullscreenable: false,
+		skipTaskbar: true,
+		alwaysOnTop: true,
+		show: false,
+		webPreferences: {
+			zoomFactor: 1,
+			spellcheck: false,
+			webSecurity: true,
+			nodeIntegration: true,
+			contextIsolation: false
+		}
+	});
+
+	// 加载独立 loading.html（file://），端口由 store 读取并注入 query，默认 15319。
+	// 开发模式：loading.html 源文件位于 web 项目 packages/web/public/（vite publicDir），
+	//   打包时由 vite 复制到 packages/app/public/；故两模式下分别从对应位置以 file:// 加载，
+	//   不依赖 vite dev server，且打包不会被 vite 覆盖（源文件受 web 项目管理）。
+	const port = (store.store.server?.port as number | undefined) || DEFAULT_SERVER_PORT;
+	// 渲染产物经 electron-vite 输出到 out/renderer（含 publicDir 拷贝的 loading.html）；
+	// dev 模式直接读 web 源文件（vite publicDir），不依赖 dev server。
+	const loadingHtmlPath = app.isPackaged
+		? path.join(app.getAppPath(), 'out', 'renderer', 'loading.html')
+		: path.join(app.getAppPath(), '..', 'web', 'public', 'loading.html');
+	win.loadURL(url.pathToFileURL(loadingHtmlPath).href + `?port=${port}`);
 
 	return win;
 }

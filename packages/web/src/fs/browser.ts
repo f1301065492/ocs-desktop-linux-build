@@ -1,12 +1,14 @@
 import { nextTick } from 'vue';
+import { Message } from '@arco-design/web-vue';
 import { store } from '../store';
-import { Process, processes, ProcessError } from '../utils/process';
+import { Process, processes, clearClosedPreview } from '../utils/process';
 import { resetSearch } from '../utils/entity';
 import { router } from '../route';
 import { Entity } from './entity';
 import { Folder, root } from './folder';
 import { BrowserOptions, BrowserOperateHistory, Tag, BrowserType, EntityOptions, BrowserRemoteMeta } from './interface';
 import { remote } from '../utils/remote';
+import { DEFAULT_SERVER_PORT } from '@ocs-desktop/common/web';
 import { RawAutomationScript } from '../components/automation-scripts';
 import { child_process } from '../utils/node';
 
@@ -19,9 +21,8 @@ export class Browser extends Entity implements BrowserOptions {
 	histories: BrowserOperateHistory[];
 	parent: string;
 	automationScripts: RawAutomationScript[];
-	// [ocs-ext] 按浏览器记录已安装脚本版本（老数据为空对象）
+	// [ocs-ext] 按浏览器记录已安装脚本版本 / 远程创建元数据
 	userscriptVersions: Record<string, string>;
-	// [ocs-ext] 远程 API 元数据
 	remoteMeta?: BrowserRemoteMeta;
 
 	constructor(opts: BrowserOptions & EntityOptions) {
@@ -34,7 +35,6 @@ export class Browser extends Entity implements BrowserOptions {
 		this.parent = opts.parent;
 		// 兼容旧字段 playwrightScripts
 		this.automationScripts = opts.automationScripts ?? (opts as any).playwrightScripts ?? [];
-		// 老数据没有这个字段：空对象表示「这个浏览器上还没装过脚本」，首次启动会安装一遍
 		this.userscriptVersions = opts.userscriptVersions ?? {};
 		this.cachePath = opts.cachePath;
 		this.remoteMeta = opts.remoteMeta;
@@ -49,22 +49,25 @@ export class Browser extends Entity implements BrowserOptions {
 
 	/** 启动浏览器 */
 	async launch() {
-		/**
-		 * 并发防护：processes 里已有该 uid 的条目说明它正在启动或已在运行。
-		 * 重复 fork 会让两个 Chromium 争用同一个 userDataDir（profile 被锁），
-		 * 且 processes 中会出现两条同 uid 记录，Process.from 只返回第一条，
-		 * 导致 close() 只能关掉其中一个，另一个变成无法回收的孤儿进程。
-		 */
+		// [ocs-ext] 并发防护：同一 uid 重复 fork 会让两个 Chromium 争用同一个 userDataDir
 		if (Process.from(this.uid)) {
-			throw new ProcessError('ALREADY_RUNNING', `浏览器「${this.name}」已在运行或正在启动中`);
+			const err = new Error(`浏览器「${this.name}」已在运行或正在启动中`);
+			(err as any).code = 'ALREADY_RUNNING';
+			throw err;
 		}
-
+		// 浏览器增强开启时限制并发数量：运行中（启动中+已启动）达到上限直接拒绝启动
+		if (store.render.setting.browser.browserEnhancement) {
+			const runningCount = processes.filter((p) => p.status === 'launching' || p.status === 'launched').length;
+			if (runningCount >= 4) {
+				Message.error('浏览器增强已开启：最多同时运行 4 个浏览器，请先关闭其他浏览器，或在设置中关闭浏览器增强功能');
+				return;
+			}
+		}
 		const process = new Process(this, {
 			executablePath: store.render.setting.launchOptions.executablePath,
 			headless: false
 		});
 		processes.push(process);
-
 		let code: void | number | null | undefined;
 		try {
 			const reactiveProcess = Process.from(this.uid);
@@ -73,13 +76,12 @@ export class Browser extends Entity implements BrowserOptions {
 				code = await reactiveProcess.launch();
 			}
 		} catch (err) {
-			// 启动失败必须清理进程表，否则会留下一个永远无法再启动的僵尸条目
+			// [ocs-ext] 启动失败必须清理进程表，否则会留下无法再启动的僵尸条目
 			Process.remove(this.uid);
 			throw err;
 		}
 
 		if (typeof code === 'number') {
-			// 子进程已退出，条目同样是垃圾数据，清掉
 			Process.remove(this.uid);
 			return code;
 		}
@@ -92,13 +94,13 @@ export class Browser extends Entity implements BrowserOptions {
 	 * 适用于模拟更真实的浏览器环境
 	 */
 	async onlyLaunch() {
-		const extensionPaths: string[] = [];
-		// @ts-ignore
-		const paths: string[] = await remote.fs.call('readdirSync', store.paths.extensionsFolder);
-
-		for (const file of paths) {
-			extensionPaths.push(await remote.path.call('join', store.paths.extensionsFolder, file));
-		}
+		// 复用主进程 getExtensionPaths，确保与正常启动一致的过滤逻辑（仅含 manifest.json 的目录）
+		const extensionPaths: string[] = await remote.methods.call('getExtensionPaths', store.paths.extensionsFolder);
+		// 起始页：启用自定义导航页时直接以导航页 URL 启动，否则为空白页。
+		const startPage =
+			store.render.setting.browser.bookmarkPage.enable !== false
+				? `http://localhost:${store.server.port || DEFAULT_SERVER_PORT}/index.html#/bookmarks?uid=${encodeURIComponent(this.uid)}`
+				: 'about:blank';
 		const cmd = ` "${store.render.setting.launchOptions.executablePath}" ${[
 			'--window-position=0,0',
 			'--no-first-run',
@@ -106,7 +108,7 @@ export class Browser extends Entity implements BrowserOptions {
 			`--user-data-dir="${this.cachePath}"`
 		]
 			.concat(formatExtensionArguments(extensionPaths))
-			.join(' ')} http://localhost:${store.server.port || 15319}/index.html#/bookmarks`;
+			.join(' ')} "${startPage}"`;
 		console.log(cmd);
 		child_process.exec(cmd);
 	}
@@ -159,6 +161,9 @@ export class Browser extends Entity implements BrowserOptions {
 			await process.close();
 		}
 
+		// 清理浏览器关闭后保留的预览图
+		clearClosedPreview(this.uid);
+
 		const parent = Folder.from(this.parent);
 		Reflect.deleteProperty(parent?.children || {}, this.uid);
 
@@ -188,8 +193,9 @@ export class Browser extends Entity implements BrowserOptions {
 
 function formatExtensionArguments(extensionPaths: string[]) {
 	const paths = extensionPaths
-		.filter((f) => f.includes('.DS_Store') === false)
+		.filter((f) => !f.includes('.DS_Store'))
 		.map((p) => p.replace(/\\/g, '/'))
 		.join(',');
-	return [`--load-extension="${paths}"`];
+	// 与主进程保持一致：--disable-extensions-except 防止 Chrome 禁用侧载扩展
+	return paths.length === 0 ? [] : [`--load-extension=${paths}`, `--disable-extensions-except=${paths}`];
 }
