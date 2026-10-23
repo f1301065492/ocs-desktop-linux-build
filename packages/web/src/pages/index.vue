@@ -81,9 +81,9 @@ const state = reactive({
 
 const version = ref('');
 
-/** 获取版本号 */
+/** 获取版本号（内部 semver 3.1.0-1 -> 展示为四段 3.1.0.1） */
 remote.app.call('getVersion').then((v) => {
-	version.value = v;
+	version.value = String(v).replace(/-(\d+)$/, '.$1');
 });
 
 function clickMenu(route: RouteRecordRaw & { meta: { title: string } }) {

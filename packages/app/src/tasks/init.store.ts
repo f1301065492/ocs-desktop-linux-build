@@ -103,5 +103,8 @@ function ensureWritableDir(targetPath: string, label: string, fallbackPath: stri
 
 /** 字符串转换成版本对象 */
 function parseVersion(version: string) {
-	return new SemVer(valid(coerce(clean(version, { loose: true }))) || '0.0.0');
+	const cleaned = clean(version, { loose: true });
+	// [ocs-ext] 先按合法 semver 解析，保留 3.1.0-1 这类预发布位（第四段扩展号）；
+	// 只有解析失败时才退回 coerce（兼容旧的非标准写法）
+	return new SemVer(valid(cleaned) || valid(coerce(cleaned)) || '0.0.0');
 }

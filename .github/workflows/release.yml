@@ -1,32 +1,20 @@
 name: Release
 
-# 手动触发的发布流程：顺延版本号 → 打 tag → 构建 → 发布 Release。
+# 手动触发的发布流程：顺延扩展版本号 → 打 tag → 构建 → 发布 Release。
 #
-# 刻意不做成 push 触发：推代码与发版是两件事，纯文档/CI 改动不该占版本号，
-# 也不该出现「推了三次涨了三个版本但一次都没发」。
+# ⚠️ 版本号规则（用户 2026-10-24 定）：**x.y.z.n 四段**。
+# - 前三位 x.y.z 跟随上游（同步上游时由 upstream-sync 更新）；
+# - 第四位 n 是本分支扩展功能的序号，每次发版 +1。
 #
-# ⚠️ 版本号规则（用户 2026-09-23 定的）：**只顺延第三位**。
-# 前两位（major.minor）只能在用户明确要求时才动，不能由提交内容自动决定。
-# 所以这里没有「有 feat 就升 minor」的自动判定——那正是 v2.14.0 那次
-# 误升 minor 的原因（范围内有个 feat 提交），事后只能把 tag 与 Release 全删掉重发。
-# minor / major 仍然保留为选项，但必须有人**显式选择**才会生效。
+# 注意：npm/electron-updater 只认 semver，四段 `3.1.0.1` 会让 electron-updater 抛
+# ERR_UPDATER_INVALID_VERSION。因此：
+# - package.json / 安装包 / latest*.yml 里用合法的 **3.1.0-1**（预发布位表示第四段）；
+# - Release tag 与界面显示用 **v3.1.0.1 / 3.1.0.1**。
 #
 # 怎么触发：
-#   gh workflow run release.yml --repo <owner>/<repo>            # 默认 patch
-#   gh workflow run release.yml --repo <owner>/<repo> --field bump=patch
-# 或在 GitHub 的 Actions 页面点 Run workflow。
-# 注意：已移除 `auto` 选项，传它会被 GitHub 以 422 拒绝（而不是悄悄当 patch）。
+#   gh workflow run release.yml --repo <owner>/<repo>
 on:
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: "递增第几位。默认 patch（只动第三位）；minor/major 需显式选择"
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-        default: patch
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -37,6 +25,7 @@ jobs:
     outputs:
       tag: ${{ steps.bump.outputs.tag }}
       version: ${{ steps.bump.outputs.version }}
+      display: ${{ steps.bump.outputs.display }}
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
@@ -46,39 +35,42 @@ jobs:
         run: |
           set -e
           CURRENT=$(jq -r .version package.json)
-          echo "当前版本: $CURRENT"
+          echo "当前内部版本: $CURRENT"
 
-          BUMP="${{ inputs.bump }}"
-          echo "递增类型: $BUMP（用户指定的显式值，不再按提交内容自动判断）"
+          # 前三位跟随上游；第四段允许两种写法：
+          # - 内部 semver: x.y.z-n
+          # - 历史/四段:   x.y.z.n
+          CORE=$(echo "$CURRENT" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          EXT=$(echo "$CURRENT" | sed -nE 's/^[0-9]+\.[0-9]+\.[0-9]+-([0-9]+)$/\1/p')
+          if [ -z "$EXT" ]; then
+            EXT=$(echo "$CURRENT" | sed -nE 's/^[0-9]+\.[0-9]+\.[0-9]+\.([0-9]+)$/\1/p')
+          fi
+          [ -n "$EXT" ] || EXT=0
+          NEXT_EXT=$((EXT + 1))
 
-          NEXT=$(node -e "
-            const [maj, min, pat] = '$CURRENT'.split('.').map(Number);
-            const b = '$BUMP';
-            const v = b === 'major' ? [maj + 1, 0, 0] : b === 'minor' ? [maj, min + 1, 0] : [maj, min, pat + 1];
-            process.stdout.write(v.join('.'));
-          ")
-          echo "新版本: $NEXT"
+          # 内部用 semver 预发布位，保证 electron-updater 能比较
+          NEXT="${CORE}-${NEXT_EXT}"
+          DISPLAY="${CORE}.${NEXT_EXT}"
+          echo "上游核心: $CORE，扩展序号: $EXT -> $NEXT_EXT"
+          echo "内部版本: $NEXT，展示/Release: $DISPLAY"
 
-          # 两处必须同步：
-          # - root package.json 是 release-please 时代留下的主版本号位置
-          # - packages/app/package.json 才是 electron-builder 产物名（ocs-${version}-...）
-          #   和运行时 app.getVersion() 的来源，漏改它会让更新检测永远认为「已是最新」
           jq --arg v "$NEXT" '.version = $v' package.json > /tmp/root.json && mv /tmp/root.json package.json
           jq --arg v "$NEXT" '.version = $v' packages/app/package.json > /tmp/app.json && mv /tmp/app.json packages/app/package.json
 
-          echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
+          echo "tag=v$DISPLAY" >> "$GITHUB_OUTPUT"
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "display=$DISPLAY" >> "$GITHUB_OUTPUT"
 
       - name: 提交并打 tag
         run: |
           set -e
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json packages/app/package.json
-          git commit -m "chore: release v${{ steps.bump.outputs.version }}"
-          git tag "v${{ steps.bump.outputs.version }}"
+          git commit -m "chore: release v${{ steps.bump.outputs.display }}"
+          git tag "v${{ steps.bump.outputs.display }}"
           git push origin "HEAD:${{ github.ref_name }}"
-          git push origin "v${{ steps.bump.outputs.version }}"
+          git push origin "v${{ steps.bump.outputs.display }}"
 
   build-and-publish:
     needs: prepare

@@ -33,6 +33,7 @@ import { store } from '../../store';
 import { AutomationScripts } from '../../scripts';
 import { ensureTlsMaterial, listLocalAddresses } from './tls';
 import { addClient, removeClient, broadcast, closeAllClients } from './events';
+import { displayVersion } from '../version';
 
 const logger = Logger('remote-api');
 
@@ -125,7 +126,7 @@ function createApp(): express.Express {
 			ok(
 				{
 					ok: true,
-					version: app.getVersion(),
+					version: displayVersion(app.getVersion()),
 					panel: getRemoteApiPublicConfig(),
 					listening,
 					rendererReady: isRendererAvailable(),
