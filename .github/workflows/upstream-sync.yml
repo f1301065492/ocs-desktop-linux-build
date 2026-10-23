@@ -65,6 +65,14 @@ jobs:
           echo "UPSTREAM_SHA=$(git rev-parse upstream/main)" >> "$GITHUB_ENV"
           echo "UPSTREAM_SHORT=$(git rev-parse --short upstream/main)" >> "$GITHUB_ENV"
 
+      - name: Token diagnostics
+        continue-on-error: true
+        run: |
+          echo "workflow actor: ${GITHUB_ACTOR}"
+          gh api /user --jq '"token user: " + .login' || true
+          gh api "/repos/${GITHUB_REPOSITORY}" --jq '"repo permissions: " + (.permissions | tostring)' || true
+          gh auth status 2>&1 || true
+
       - name: Check whether sync is needed
         id: check
         run: |
