@@ -127,9 +127,13 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 - `main` 若有分支保护、不允许 Actions 直接 push，任务会自动回退成 PR 模式。
 - **令牌要求**（二选一）：
   1. 仓库 Settings → Actions → General → Workflow permissions 设为 **Read and write**；
-  2. 或添加 Actions secret `UPSTREAM_SYNC_TOKEN`（fine-grained PAT，给 Contents / Issues / Pull requests 读写）。
+  2. 或添加 Actions secret `UPSTREAM_SYNC_TOKEN`（fine-grained PAT，仓库权限需要
+     **Contents / Issues / Pull requests / Workflows** 四项 Read and write，Metadata 自动只读）。
   两者都没有时，任务仍会检查并尝试合并，但无法推送/建 issue；冲突和失败信息会写进该次
   Actions 运行的 **Summary**，运行本身标记为失败。
+- 细粒度 PAT 对部分 GraphQL 写操作会返回 `Resource not accessible by personal access token`，
+  所以工作流**建 issue、评论、建 PR 都走 REST 接口**（`gh api`），不要改回 `gh issue create` /
+  `gh pr create`。
 - **第一次同步（2.13 → 3.x）跨度很大**：上游把构建链迁到了 electron-vite、类型下沉到 common、
   重做了界面与加密，实测有 30 处冲突，必然走“手动合并”路径；按第五节处理完这一次以后，
   后续小版本更新才能稳定自动合并。
