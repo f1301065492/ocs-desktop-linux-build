@@ -120,8 +120,9 @@ jobs:
             echo "处理方式见仓库根目录 \`FORK.md\` 第四节：以上游新版本为基线搬运 \`ext/\`，再重落 \`[ocs-ext]\` 钩子。"
           } > "$RUNNER_TEMP/issue.md"
           num=$(gh api -X GET search/issues \
-            -f q="repo:${GITHUB_REPOSITORY} state:open in:title 上游更新需要手动合并" \
+            -f q="repo:${GITHUB_REPOSITORY} is:issue state:open in:title 上游更新需要手动合并" \
             --jq '.items[0].number' 2>/dev/null || true)
+          case "$num" in ''|*[!0-9]*) num="" ;; esac
           if [ -n "$num" ]; then
             gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${num}/comments" \
               -f body="$(cat "$RUNNER_TEMP/issue.md")" >/dev/null || \
@@ -186,8 +187,9 @@ jobs:
             echo "请在本机执行 \`git merge upstream/main\` 后按 \`FORK.md\` 排查。"
           } > "$RUNNER_TEMP/issue.md"
           num=$(gh api -X GET search/issues \
-            -f q="repo:${GITHUB_REPOSITORY} state:open in:title 上游更新检查未通过" \
+            -f q="repo:${GITHUB_REPOSITORY} is:issue state:open in:title 上游更新检查未通过" \
             --jq '.items[0].number' 2>/dev/null || true)
+          case "$num" in ''|*[!0-9]*) num="" ;; esac
           if [ -n "$num" ]; then
             gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${num}/comments" \
               -f body="$(cat "$RUNNER_TEMP/issue.md")" >/dev/null || \
