@@ -950,6 +950,7 @@ const PAGE_NOTIFY_SCRIPT = String.raw`
       + '[class*="message-box"],[class*="toast"],[class*="notice"],'
       + '[class*="notification"]';
     var lastText = new WeakMap();
+    var observedRoots = new WeakSet();
     function textOf(el) {
       return String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
     }
@@ -960,6 +961,19 @@ const PAGE_NOTIFY_SCRIPT = String.raw`
       if (lastText.get(el) === text) return;
       lastText.set(el, text);
       try { console.log('[ocs-notify] ' + text); } catch (e) {}
+    }
+    function scanRoot(root) {
+      if (!root || !root.querySelectorAll) return;
+      var nodes = root.querySelectorAll(SELECTOR);
+      for (var i = 0; i < nodes.length; i += 1) emit(nodes[i]);
+    }
+    function observeRoot(root) {
+      if (!root || observedRoots.has(root)) return;
+      observedRoots.add(root);
+      try {
+        observer.observe(root, { childList: true, subtree: true, characterData: true });
+      } catch (e) {}
+      scanRoot(root);
     }
     function inspect(el) {
       if (!el || el.nodeType !== 1) return;
@@ -979,19 +993,34 @@ const PAGE_NOTIFY_SCRIPT = String.raw`
         var nodes = el.querySelectorAll(SELECTOR);
         for (var i = 0; i < nodes.length; i += 1) emit(nodes[i]);
       }
+      if (el.shadowRoot) observeRoot(el.shadowRoot);
     }
-    function start() {
-      inspect(document.body);
-      new MutationObserver(function (records) {
-        for (var i = 0; i < records.length; i += 1) {
-          var record = records[i];
-          if (record.type === 'characterData') {
-            inspect(record.target.parentElement);
-            continue;
-          }
-          for (var j = 0; j < record.addedNodes.length; j += 1) inspect(record.addedNodes[j]);
+    function handle(records) {
+      for (var i = 0; i < records.length; i += 1) {
+        var record = records[i];
+        if (record.type === 'characterData') {
+          inspect(record.target.parentElement);
+          continue;
         }
-      }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        for (var j = 0; j < record.addedNodes.length; j += 1) inspect(record.addedNodes[j]);
+      }
+    }
+    var observer = new MutationObserver(handle);
+    // 用户脚本的弹窗常放在 Shadow DOM（甚至 closed）里：包装 attachShadow
+    // 拿到真实 root 后直接观察，closed 模式也能覆盖。
+    try {
+      var nativeAttach = Element.prototype.attachShadow;
+      if (typeof nativeAttach === 'function') {
+        Element.prototype.attachShadow = function (init) {
+          var root = nativeAttach.call(this, init);
+          try { observeRoot(root); } catch (e) {}
+          return root;
+        };
+      }
+    } catch (e) {}
+    function start() {
+      observeRoot(document.documentElement);
+      inspect(document.body);
     }
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', start, { once: true });
@@ -1033,6 +1062,11 @@ function handleBrowserInit(browser: BrowserContext, config: { enable_dialog?: bo
 			const marker = '[ocs-notify] ';
 			if (text.startsWith(marker)) {
 				console.log(`[页面通知] ${text.slice(marker.length)}`);
+				return;
+			}
+			// 兜底：用户脚本直接把通知打到 console（DOM 钩子覆盖不到的组件）
+			if (text.length <= 200 && /任务点|章节.*完成|验证码|全部完成|已完成/.test(text)) {
+				console.log(`[页面通知] ${text.replace(/\s+/g, ' ').trim()}`);
 			}
 		});
 
