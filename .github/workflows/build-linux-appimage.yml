@@ -85,6 +85,40 @@ jobs:
           PLATFORM: linux
           ARCH: x64
 
+      # electron-builder 在 --publish never 下不一定产出 latest-linux.yml；
+      # electron-updater 靠它检查更新，缺失时按 AppImage 现算一份。
+      - name: Generate update metadata
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
+          const dir = 'releases';
+          const appPkg = JSON.parse(fs.readFileSync('packages/app/package.json', 'utf8'));
+          const ymlPath = path.join(dir, 'latest-linux.yml');
+          if (fs.existsSync(ymlPath)) {
+            console.log('latest-linux.yml 已由 electron-builder 生成，跳过');
+            process.exit(0);
+          }
+          const appImage = fs.readdirSync(dir).find((f) => f.endsWith('.AppImage'));
+          if (!appImage) throw new Error('releases/ 下没有 AppImage');
+          const buffer = fs.readFileSync(path.join(dir, appImage));
+          const sha512 = crypto.createHash('sha512').update(buffer).digest('base64');
+          const content = [
+            `version: ${appPkg.version}`,
+            'files:',
+            `  - url: ${appImage}`,
+            `    sha512: ${sha512}`,
+            `    size: ${buffer.length}`,
+            `path: ${appImage}`,
+            `sha512: ${sha512}`,
+            `releaseDate: '${new Date().toISOString()}'`,
+            ''
+          ].join('\n');
+          fs.writeFileSync(ymlPath, content);
+          console.log('已生成', ymlPath);
+          NODE
+
       # 发布流程：直接传到 Release。不经过 Actions artifact——
       # 那边有存储配额（免费账户私有仓库 500MB），而单个安装包就 500MB，
       # 走 artifacts 既存两份又必然超配额
