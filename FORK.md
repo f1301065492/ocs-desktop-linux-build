@@ -105,6 +105,9 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
   首次启动由 `init.chrome.ts` 解压到 userData，作为「软件内置浏览器」使用。
 - 系统浏览器主版本 >137 时（Chrome 137 后禁止命令行加载扩展），渲染进程启动前会自动
   切换到内置浏览器；内置浏览器缺失时抛 `BROWSER_VERSION_TOO_HIGH` 并提示。
+- **Linux 无图形界面**：`ext/display.ts` 在 worker 启动有头浏览器前检查 XServer：
+  复用已有 Xvfb → 为当前 worker 启动独立 Xvfb → 都没有则退回 headless。
+  deb 的 `depends` 已包含 `xvfb`；AppImage/手动部署需 `sudo apt install -y xvfb`。
 - `.github/workflows/release.yml`：只递增第四位（四段版本号的扩展序号）。
 - **更新检测**：AppImage / Windows / macOS 走 electron-updater；**Linux deb** 走
   `ext/update/deb.ts`（electron-updater 在 Linux 只支持 AppImage），按 `latest-linux.yml`
