@@ -106,6 +106,10 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 - 系统浏览器主版本 >137 时（Chrome 137 后禁止命令行加载扩展），渲染进程启动前会自动
   切换到内置浏览器；内置浏览器缺失时抛 `BROWSER_VERSION_TOO_HIGH` 并提示。
 - `.github/workflows/release.yml`：只递增第四位（四段版本号的扩展序号）。
+- **更新检测**：AppImage / Windows / macOS 走 electron-updater；**Linux deb** 走
+  `ext/update/deb.ts`（electron-updater 在 Linux 只支持 AppImage），按 `latest-linux.yml`
+  检查版本、下载 deb 并给出 `apt install` 命令。检查不再被 3s 上游 CDN 探测直接跳过，
+  只用 15s 总超时兜底；国内网络可用设置页的「自建镜像」。
 - `.github/workflows/build-linux-appimage.yml`、`packages/app/electron.builder.json`：Linux 打包、deb 依赖、图标、`tools/` 随包发布。
 - `packages/app/build/icons/`：多尺寸图标集。
 - `.gitignore`：忽略三份只留本地的文件。
