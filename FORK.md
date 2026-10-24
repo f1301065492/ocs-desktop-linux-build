@@ -120,6 +120,8 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 
 ### 版本号规则（2026-10-24 起）
 
+- **发版必须由维护者明确确认**：只有用户说“发版”才触发 `release.yml` / 创建 tag / Release；
+  自动化任务与日常修复只准备版本号，不自行发版。
 - 对外版本 / Release tag：**`x.y.z.n`**。前三位跟随上游，第四位 `n` 是本分支扩展序号，每次发版 +1。
 - 内部 `package.json`：**`x.y.z-n`**。四段数字不是合法 semver，electron-updater 会抛
   `ERR_UPDATER_INVALID_VERSION`，所以第四位用预发布位表示；界面与 `/health` 展示时把 `-n` 转成 `.n`。
