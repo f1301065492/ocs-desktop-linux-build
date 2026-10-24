@@ -44,12 +44,9 @@ export function getValidBrowsers(): ValidBrowser[] {
 			].filter((b) => b.path) as ValidBrowser[];
 		}
 		case 'linux': {
-			return [
-				{
-					name: '软件内置浏览器-谷歌(Chrome)',
-					path: resolveBrowserPath('bin/chrome/chrome/chrome')
-				}
-			].filter((b) => b.path) as ValidBrowser[];
+			// [ocs-ext] 安装包已内置 Chrome 137；解压后的运行时可执行文件在 userData 下，
+			// 必须走 builtin（getBuiltinChromeRuntimePath），不能只查只读的 resources 目录
+			return builtin;
 		}
 		default: {
 			// darwin / linux：仅提供内置浏览器

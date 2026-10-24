@@ -161,8 +161,8 @@ jobs:
           fi
           NEXT="${UPSTREAM_CORE}-${EXT}"
           if [ "$NEXT" != "$CURRENT" ]; then
-            jq --arg v "$NEXT" '.version = $v' package.json > "$RUNNER_TEMP/root.json" && mv "$RUNNER_TEMP/root.json" package.json
-            jq --arg v "$NEXT" '.version = $v' packages/app/package.json > "$RUNNER_TEMP/app.json" && mv "$RUNNER_TEMP/app.json" packages/app/package.json
+            jq --tab --arg v "$NEXT" '.version = $v' package.json > "$RUNNER_TEMP/root.json" && mv "$RUNNER_TEMP/root.json" package.json
+            jq --tab --arg v "$NEXT" '.version = $v' packages/app/package.json > "$RUNNER_TEMP/app.json" && mv "$RUNNER_TEMP/app.json" packages/app/package.json
             git add package.json packages/app/package.json
             git commit -m "chore: 版本核心跟随上游 $UPSTREAM_CORE"
             echo "版本核心已更新：$CURRENT -> $NEXT"

@@ -14,10 +14,10 @@ export const BUILTIN_CHROME_FILENAME =
 /**
  * 内置 Chrome 解压根目录。
  *
- * - 打包模式：`resources/bin/chrome`（旧版完整包的遗留布局，精简版安装包不再包含）
+ * - 打包模式：`resources/bin/chrome`（安装包重新内置 chrome.zip，见 scripts/prepare-builtin-chrome.js）
  * - 开发模式：`<projectRoot>/bin/chrome/<platform>-<arch>`（本地手动放置 chrome.zip 可跳过下载）
  *
- * 精简版安装包中上述路径通常不存在，init.chrome.ts 会转为从远程下载源拉取。
+ * 本地压缩包缺失时，init.chrome.ts 会转为从远程下载源拉取。
  */
 export function getBuiltinChromeRoot(): string {
 	if (app.isPackaged) {

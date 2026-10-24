@@ -78,6 +78,14 @@ jobs:
           echo "PLATFORM=linux" >> $GITHUB_ENV
           echo "ARCH=x64" >> $GITHUB_ENV
 
+      - name: Cache built-in Chrome
+        uses: actions/cache@v4
+        with:
+          path: bin/chrome
+          key: builtin-chrome-137.0.7151.55-${{ runner.os }}
+          restore-keys: |
+            builtin-chrome-137.0.7151.55-
+
       - name: Build
         run: pnpm build
         env:

@@ -148,7 +148,8 @@ export async function initChrome(_win: BrowserWindow): Promise<boolean> {
 				path.join(chromeRuntimePath, 'chrome.zip')
 			].find((p) => fs.existsSync(p));
 
-			// 精简版安装包不再内置浏览器压缩包：本地不存在时从远程下载源拉取（三级源自动降级 + SHA256 校验）
+			// 安装包已内置 chrome.zip（构建脚本 scripts/prepare-builtin-chrome.js 准备）；
+			// 仅在本地缺失时从远程下载源拉取（三级源自动降级 + SHA256 校验）
 			if (!chromeZipPath) {
 				chromeZipPath = path.join(chromeRuntimePath, 'chrome.zip');
 				setInitStatus({ status: 'loading', message: '正在下载内置浏览器...' });

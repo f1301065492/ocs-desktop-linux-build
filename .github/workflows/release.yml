@@ -54,8 +54,8 @@ jobs:
           echo "上游核心: $CORE，扩展序号: $EXT -> $NEXT_EXT"
           echo "内部版本: $NEXT，展示/Release: $DISPLAY"
 
-          jq --arg v "$NEXT" '.version = $v' package.json > /tmp/root.json && mv /tmp/root.json package.json
-          jq --arg v "$NEXT" '.version = $v' packages/app/package.json > /tmp/app.json && mv /tmp/app.json packages/app/package.json
+          jq --tab --arg v "$NEXT" '.version = $v' package.json > /tmp/root.json && mv /tmp/root.json package.json
+          jq --tab --arg v "$NEXT" '.version = $v' packages/app/package.json > /tmp/app.json && mv /tmp/app.json packages/app/package.json
 
           echo "tag=v$DISPLAY" >> "$GITHUB_OUTPUT"
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"

@@ -1,76 +1,76 @@
 {
-  "name": "ocs-desktop",
-  "version": "3.1.0-2",
-  "description": "desktop for userscript",
-  "packageManager": "pnpm@10.21.0",
-  "files": [
-    "lib",
-    "dist"
-  ],
-  "scripts": {
-    "build": "pnpm typecheck && gulp -f ./scripts/build-app.js",
-    "build:upgrader-stub": "gulp -f ./scripts/build-upgrader-stub.js",
-    "typecheck": "pnpm --filter @ocs-desktop/common build && pnpm --filter @ocs-desktop/app exec tsc --noEmit && pnpm --filter @ocs-desktop/web exec vue-tsc --noEmit",
-    "lint": "prettier -c ./.prettierrc.json --check \"**/*.{ts,js,vue,css}\" && eslint ./packages --ext .ts,.tsx,.js,.jsx,.vue",
-    "lint:fix": "prettier -c ./.prettierrc.json --write \"**/*.{ts,js,vue,css}\" && eslint ./packages --ext .ts,.tsx,.js,.jsx,.vue --fix",
-    "test": "pnpm --filter @ocs-desktop/common test && pnpm --filter @ocs-desktop/app test",
-    "prepare": "husky",
-    "postinstall": "pnpm --filter @ocs-desktop/app exec install-electron",
-    "setup": "bash ./scripts/setup.sh",
-    "dev": "pnpm --filter @ocs-desktop/app dev"
-  },
-  "devDependencies": {
-    "@commitlint/cli": "^19.0.0",
-    "@commitlint/config-conventional": "^19.0.0",
-    "@html-eslint/eslint-plugin": "^0.15.0",
-    "@types/node": "^22.0.0",
-    "@typescript-eslint/eslint-plugin": "^5.19.0",
-    "@typescript-eslint/parser": "^5.19.0",
-    "browser-env": "^3.3.0",
-    "concurrently": "^9.2.1",
-    "cz-conventional-changelog": "^3.3.0",
-    "del": "^6.0.0",
-    "eslint": "^7.32.0",
-    "eslint-config-prettier": "^8.5.0",
-    "eslint-config-standard": "^16.0.3",
-    "eslint-plugin-import": "^2.22.1",
-    "eslint-plugin-node": "^11.1.0",
-    "eslint-plugin-prettier": "^4.0.0",
-    "eslint-plugin-promise": "^4.2.1",
-    "eslint-plugin-vue": "^9.8.0",
-    "gulp": "^4.0.2",
-    "gulp-cli": "^2.3.0",
-    "gulp-zip": "^5.1.0",
-    "husky": "^9.0.0",
-    "prettier": "^2.8.8",
-    "typescript": "catalog:"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ocsjs/ocs-desktop.git"
-  },
-  "keywords": [
-    "ocs",
-    "script",
-    "playwright",
-    "electron",
-    "vue",
-    "arco-design-vue",
-    "typescript"
-  ],
-  "author": "enncy",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/ocsjs/ocs-desktop/issues"
-  },
-  "homepage": "https://github.com/ocsjs/ocs-desktop#readme",
-  "engines": {
-    "node": ">=22.0.0",
-    "pnpm": ">=10.0.0"
-  },
-  "config": {
-    "commitizen": {
-      "path": "./node_modules/cz-conventional-changelog"
-    }
-  }
+	"name": "ocs-desktop",
+	"version": "3.1.0-2",
+	"description": "desktop for userscript",
+	"packageManager": "pnpm@10.21.0",
+	"files": [
+		"lib",
+		"dist"
+	],
+	"scripts": {
+		"build": "node ./scripts/prepare-builtin-chrome.js && pnpm typecheck && gulp -f ./scripts/build-app.js",
+		"build:upgrader-stub": "gulp -f ./scripts/build-upgrader-stub.js",
+		"typecheck": "pnpm --filter @ocs-desktop/common build && pnpm --filter @ocs-desktop/app exec tsc --noEmit && pnpm --filter @ocs-desktop/web exec vue-tsc --noEmit",
+		"lint": "prettier -c ./.prettierrc.json --check \"**/*.{ts,js,vue,css}\" && eslint ./packages --ext .ts,.tsx,.js,.jsx,.vue",
+		"lint:fix": "prettier -c ./.prettierrc.json --write \"**/*.{ts,js,vue,css}\" && eslint ./packages --ext .ts,.tsx,.js,.jsx,.vue --fix",
+		"test": "pnpm --filter @ocs-desktop/common test && pnpm --filter @ocs-desktop/app test",
+		"prepare": "husky",
+		"postinstall": "pnpm --filter @ocs-desktop/app exec install-electron",
+		"setup": "bash ./scripts/setup.sh",
+		"dev": "pnpm --filter @ocs-desktop/app dev"
+	},
+	"devDependencies": {
+		"@commitlint/cli": "^19.0.0",
+		"@commitlint/config-conventional": "^19.0.0",
+		"@html-eslint/eslint-plugin": "^0.15.0",
+		"@types/node": "^22.0.0",
+		"@typescript-eslint/eslint-plugin": "^5.19.0",
+		"@typescript-eslint/parser": "^5.19.0",
+		"browser-env": "^3.3.0",
+		"concurrently": "^9.2.1",
+		"cz-conventional-changelog": "^3.3.0",
+		"del": "^6.0.0",
+		"eslint": "^7.32.0",
+		"eslint-config-prettier": "^8.5.0",
+		"eslint-config-standard": "^16.0.3",
+		"eslint-plugin-import": "^2.22.1",
+		"eslint-plugin-node": "^11.1.0",
+		"eslint-plugin-prettier": "^4.0.0",
+		"eslint-plugin-promise": "^4.2.1",
+		"eslint-plugin-vue": "^9.8.0",
+		"gulp": "^4.0.2",
+		"gulp-cli": "^2.3.0",
+		"gulp-zip": "^5.1.0",
+		"husky": "^9.0.0",
+		"prettier": "^2.8.8",
+		"typescript": "catalog:"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ocsjs/ocs-desktop.git"
+	},
+	"keywords": [
+		"ocs",
+		"script",
+		"playwright",
+		"electron",
+		"vue",
+		"arco-design-vue",
+		"typescript"
+	],
+	"author": "enncy",
+	"license": "MIT",
+	"bugs": {
+		"url": "https://github.com/ocsjs/ocs-desktop/issues"
+	},
+	"homepage": "https://github.com/ocsjs/ocs-desktop#readme",
+	"engines": {
+		"node": ">=22.0.0",
+		"pnpm": ">=10.0.0"
+	},
+	"config": {
+		"commitizen": {
+			"path": "./node_modules/cz-conventional-changelog"
+		}
+	}
 }

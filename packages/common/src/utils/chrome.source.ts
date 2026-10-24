@@ -2,7 +2,8 @@
  * 内置浏览器（Chrome for Testing）下载源常量模块。
  *
  * 137 版本后谷歌禁止使用命令行加载插件，因此内置浏览器版本严格锁定、手动更新。
- * 安装包不再内置浏览器，首次启动时按「国内镜像 → 官方 → 自建 CDN」优先级下载。
+ * 安装包通过 scripts/prepare-builtin-chrome.js 内置对应平台的 chrome.zip；
+ * 压缩包缺失时仍按「国内镜像 → 官方 → 自建 CDN」优先级下载兜底。
  *
  * 升级浏览器版本时需同步修改：
  * 1. BUILTIN_CHROME_VERSION — 版本号

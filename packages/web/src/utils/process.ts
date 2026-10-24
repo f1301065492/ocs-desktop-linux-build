@@ -343,6 +343,32 @@ export class Process extends EventEmitter {
 				throw err;
 			}
 
+			// [ocs-ext] Windows 系统浏览器 >137 无法通过命令行加载扩展：自动改用软件内置的 Chrome 137
+			if (process.platform === 'win32') {
+				const major = await remote.methods.call('getBrowserMajorVersion', this.launchOptions.executablePath);
+				if (major && major > 137) {
+					const browsers = (await remote.methods.call('getValidBrowsers')) || [];
+					const builtin = browsers.find((b) => String(b?.name || '').includes('内置'));
+					const builtinPath = builtin?.path;
+					if (builtinPath && (await remote.fs.call('existsSync', builtinPath))) {
+						this.launchOptions.executablePath = builtinPath;
+						notify(
+							'浏览器版本过高，已切换内置浏览器',
+							`当前浏览器版本 ${major}，Chrome 137 之后无法通过命令行加载脚本管理器。` +
+								'已自动改用软件内置浏览器（Chrome 137）。',
+							'browser-version-too-high-auto-switch',
+							{ duration: 60 * 1000, type: 'warning', copy: true }
+						);
+					} else {
+						const err = new Error(
+							'当前浏览器版本过高，无法自动加载脚本管理器。请安装带内置浏览器的 OCS 版本，或在设置中改用内置浏览器。'
+						);
+						(err as any).code = 'BROWSER_VERSION_TOO_HIGH';
+						throw err;
+					}
+				}
+			}
+
 			// 脚本检查
 			Status.loading('正在检查本地脚本...');
 			const enabledUserScripts = store.render.scripts.filter((s) => s.enable);
