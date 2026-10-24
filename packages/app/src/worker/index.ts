@@ -16,6 +16,7 @@ import { getBrowserMajorVersion, getExtensionPaths } from '../utils/browser';
 import { PAGE_NOTIFY_SCRIPT, installPageNotifier } from '../ext/page-notify';
 import { listPagesExt, screenshotPageExt } from '../ext/worker-ext';
 import { clearLoginState } from '../ext/login-state';
+import { ensureLinuxDisplay } from '../ext/display';
 
 const { bgRedBright, bgBlueBright, bgYellowBright, bgGray } = new Chalk({ level: 2 });
 
@@ -1018,6 +1019,8 @@ export async function launchBrowser({
 	if (config?.clear_login_on_launch) {
 		clearLoginState(userDataDir);
 	}
+	// [ocs-ext] 服务器/容器没有 XServer 时自动准备 Xvfb；Xvfb 不可用则退回无头模式
+	headless = await ensureLinuxDisplay(headless);
 	return new Promise<void>((resolve, reject) => {
 		// 启动前把浏览器 profile 的默认下载目录指向软件"文件下载"目录（原生下载行为落盘位置）
 		prepareDownloadPreferences(userDataDir, downloadsPath);
