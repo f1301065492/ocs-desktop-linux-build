@@ -164,6 +164,35 @@ export const EXT_METHODS = {
 	encryptPortable,
 	decryptPortable,
 
+	/**
+	 * 主进程的运行环境（只取与显示/路径相关的变量）。
+	 *
+	 * 渲染进程的 `process.env` 在 Electron 下可能不完整（sandbox/环境隔离），
+	 * 直接用它 fork worker 会丢掉 DISPLAY，即使 OCS 是用 xvfb-run 启动的。
+	 */
+	getRuntimeEnv: (): Record<string, string> => {
+		const keys = [
+			'DISPLAY',
+			'XAUTHORITY',
+			'WAYLAND_DISPLAY',
+			'XDG_RUNTIME_DIR',
+			'PATH',
+			'HOME',
+			'LANG',
+			'LC_ALL',
+			'TZ',
+			'TMPDIR'
+		];
+		const env: Record<string, string> = {};
+		for (const key of keys) {
+			const value = process.env[key];
+			if (value) {
+				env[key] = value;
+			}
+		}
+		return env;
+	},
+
 	/** 远程 API 运行状态（不含密钥哈希与盐） */
 	remoteApiGetStatus: () => getRemoteApiStatus(),
 	/** 更新远程 API 配置并立即生效 */

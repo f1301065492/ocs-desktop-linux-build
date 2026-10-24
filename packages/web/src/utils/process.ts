@@ -193,11 +193,14 @@ export class Process extends EventEmitter {
 	 * 使用 child_process 运行 ocs 命令
 	 */
 	async init(onConsole?: (data: any) => void) {
+		// [ocs-ext] 主进程的 DISPLAY/PATH 等显式合并进来：
+		// 渲染进程的 process.env 在 Electron 下可能不完整，worker 会拿不到 DISPLAY
+		const mainEnv = (await remote.methods.call('getRuntimeEnv').catch(() => null)) || {};
 		this.shell = child_process.fork(
 			await remote.path.call('join', await remote.app.call('getAppPath'), './out/main/script.js'),
 			{
 				stdio: ['ipc'],
-				env: process.env
+				env: { ...process.env, ...mainEnv }
 			}
 		);
 		this.worker = createRemoteScriptWorker(this.shell);
