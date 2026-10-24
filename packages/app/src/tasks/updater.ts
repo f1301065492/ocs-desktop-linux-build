@@ -6,8 +6,8 @@ import { Logger } from '../logger';
 import { store } from '../store';
 import { getCurrentWebContents, moveWindowToTop } from '../utils';
 import { UpdateInformationResource, OCS_UPDATER, OCS_DOWNLOAD_PAGE, AppStore } from '@ocs-desktop/common';
-import { probeNetwork } from './net.status';
 import { getUpdateSourceConfig } from '../ext/update/source'; // [ocs-ext]
+import { checkDebUpdate, isDebInstall, updateDebPackage } from '../ext/update/deb'; // [ocs-ext] deb 安装走自定义检查
 
 const logger = Logger('updater');
 
@@ -151,6 +151,13 @@ function applyUpdaterConfig() {
 }
 
 export async function updater(config?: AppStore['updater']) {
+	// [ocs-ext] Linux deb：electron-updater 只支持 AppImage，这里按 generic 清单自行检查
+	if (isDebInstall()) {
+		if (config) {
+			store.set('updater', config);
+		}
+		return checkDebUpdate(app.getVersion());
+	}
 	listenUpdaterEvents();
 	/**
 	 * 渲染层手动检查更新时会携带最新配置（持久化防抖可能尚未落盘），
@@ -161,11 +168,8 @@ export async function updater(config?: AppStore['updater']) {
 	}
 	applyUpdaterConfig();
 	logger.info('检查更新', { version: app.getVersion() });
-	// 弱网模式：3s 探测失败直接跳过更新检测，避免 checkForUpdates 在弱网下长时间挂起
-	if (!(await probeNetwork())) {
-		logger.info('弱网模式，跳过本次更新检测');
-		return undefined;
-	}
+	// 不再用 3s 网络探测直接跳过更新：探针是上游 CDN，国内网络经常超时，
+	// 会让「检查更新」永久失效。改用下面的 15s 总超时兜底。
 	try {
 		// 15s 超时兜底：electron-updater 无显式超时，弱网环境下检测可能长时间挂起
 		const result = await Promise.race([
@@ -197,6 +201,11 @@ export async function updater(config?: AppStore['updater']) {
  * 渲染层“确认更新”后调用：开始下载更新包。
  * IPC 方法名保持 updateApp 不变，内部由“下载zip+删目录+解压”改为 electron-updater 安装包下载。
  */
-export async function updateApp() {
+export async function updateApp(newVersion?: UpdateInformationResource) {
+	// [ocs-ext] deb 安装：下载 deb 并给出 apt 安装命令
+	if (isDebInstall()) {
+		await updateDebPackage(newVersion);
+		return;
+	}
 	await autoUpdater.downloadUpdate();
 }
