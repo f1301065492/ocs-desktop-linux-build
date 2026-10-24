@@ -98,7 +98,14 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 
 ### 构建 / 发版相关（与上游功能无关）
 
-- `.github/workflows/release.yml`：仅 patch 发版（上游的 release-please 已删除）。
+- `scripts/prepare-builtin-chrome.js`：构建前按目标平台下载并校验 Chrome for Testing **137.0.7151.55**
+  到 `bin/chrome/<platform>-<arch>/chrome.zip`（`bin/` 被 gitignore，不进仓库）。
+  `pnpm build` / `app dist` 会自动先跑它；Linux CI 用 actions/cache 缓存该目录。
+- `electron.builder.json`：把对应平台的 `chrome.zip` 打进 `resources/bin/chrome/`，
+  首次启动由 `init.chrome.ts` 解压到 userData，作为「软件内置浏览器」使用。
+- 系统浏览器主版本 >137 时（Chrome 137 后禁止命令行加载扩展），渲染进程启动前会自动
+  切换到内置浏览器；内置浏览器缺失时抛 `BROWSER_VERSION_TOO_HIGH` 并提示。
+- `.github/workflows/release.yml`：只递增第四位（四段版本号的扩展序号）。
 - `.github/workflows/build-linux-appimage.yml`、`packages/app/electron.builder.json`：Linux 打包、deb 依赖、图标、`tools/` 随包发布。
 - `packages/app/build/icons/`：多尺寸图标集。
 - `.gitignore`：忽略三份只留本地的文件。
