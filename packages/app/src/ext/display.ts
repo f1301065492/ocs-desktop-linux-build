@@ -1,8 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
-import { Logger } from '../logger';
-
-const logger = Logger('display');
 
 /**
  * Linux 无图形界面时给 Playwright 准备一个 XServer。
@@ -83,13 +80,13 @@ export async function ensureLinuxDisplay(headless: boolean): Promise<boolean> {
 		if (currentNumber === null || hasSocket(currentNumber)) {
 			return useX11(currentDisplay);
 		}
-		logger.warn(`DISPLAY=${currentDisplay} 的 X socket 不存在，尝试启动 Xvfb`);
+		console.warn(`[显示] DISPLAY=${currentDisplay} 的 X socket 不存在，尝试启动 Xvfb`);
 	}
 
 	// 复用已存在的本地 Xvfb（例如用户自己起的 xvfb-run）
 	for (let n = 99; n <= 120; n += 1) {
 		if (hasSocket(n)) {
-			logger.info(`复用已有 Xvfb：DISPLAY=:${n}`);
+			console.log(`[显示] 复用已有 Xvfb：DISPLAY=:${n}`);
 			return useX11(`:${n}`);
 		}
 	}
@@ -111,7 +108,7 @@ export async function ensureLinuxDisplay(headless: boolean): Promise<boolean> {
 		const ok = await waitForSocket(n, 3000, () => spawnFailed || child.exitCode !== null);
 		if (ok) {
 			xvfbProcess = child;
-			logger.info(`已启动 Xvfb：DISPLAY=:${n}`);
+			console.log(`[显示] 已启动 Xvfb：DISPLAY=:${n}`);
 			return useX11(`:${n}`);
 		}
 		try {
@@ -122,7 +119,7 @@ export async function ensureLinuxDisplay(headless: boolean): Promise<boolean> {
 	}
 
 	// 没装 xvfb：退回无头模式，至少能启动（扩展加载可能受限）
-	logger.warn('未检测到 XServer 且 Xvfb 不可用，改用无头模式。服务器建议安装：sudo apt install -y xvfb');
+	console.warn('[显示] 未检测到 XServer 且 Xvfb 不可用，改用无头模式。服务器建议安装：sudo apt install -y xvfb');
 	console.log('[浏览器] 未检测到图形界面且 Xvfb 不可用，已退回无头模式；建议安装 xvfb 以正常加载扩展');
 	return true;
 }
