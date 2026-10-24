@@ -29,6 +29,19 @@ function hasSocket(displayNumber: number): boolean {
 	}
 }
 
+/**
+ * 切到 X11：设置 DISPLAY，并清掉可能让 Chromium 选择 Wayland 的变量。
+ *
+ * 服务器上常见「有 Xvfb 但也继承了 WAYLAND_DISPLAY」：Electron/Chromium 会优先走
+ * Wayland，连不上合成器时 Playwright 就报 “headed browser without XServer”。
+ */
+function useX11(display: string): boolean {
+	process.env.DISPLAY = display;
+	delete process.env.WAYLAND_DISPLAY;
+	delete process.env.XDG_SESSION_TYPE;
+	return false;
+}
+
 /** 从 DISPLAY 解析本地 display 号；远程 display（host:0）返回 null */
 function localDisplayNumber(display: string | undefined): number | null {
 	if (!display) return null;
@@ -68,7 +81,7 @@ export async function ensureLinuxDisplay(headless: boolean): Promise<boolean> {
 	if (currentDisplay) {
 		// 远程 display 无法用本地 socket 判断，直接信任
 		if (currentNumber === null || hasSocket(currentNumber)) {
-			return false;
+			return useX11(currentDisplay);
 		}
 		logger.warn(`DISPLAY=${currentDisplay} 的 X socket 不存在，尝试启动 Xvfb`);
 	}
@@ -76,9 +89,8 @@ export async function ensureLinuxDisplay(headless: boolean): Promise<boolean> {
 	// 复用已存在的本地 Xvfb（例如用户自己起的 xvfb-run）
 	for (let n = 99; n <= 120; n += 1) {
 		if (hasSocket(n)) {
-			process.env.DISPLAY = `:${n}`;
 			logger.info(`复用已有 Xvfb：DISPLAY=:${n}`);
-			return false;
+			return useX11(`:${n}`);
 		}
 	}
 
@@ -99,9 +111,8 @@ export async function ensureLinuxDisplay(headless: boolean): Promise<boolean> {
 		const ok = await waitForSocket(n, 3000, () => spawnFailed || child.exitCode !== null);
 		if (ok) {
 			xvfbProcess = child;
-			process.env.DISPLAY = `:${n}`;
 			logger.info(`已启动 Xvfb：DISPLAY=:${n}`);
-			return false;
+			return useX11(`:${n}`);
 		}
 		try {
 			child.kill();

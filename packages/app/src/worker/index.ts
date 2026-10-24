@@ -1021,6 +1021,10 @@ export async function launchBrowser({
 	}
 	// [ocs-ext] 服务器/容器没有 XServer 时自动准备 Xvfb；Xvfb 不可用则退回无头模式
 	headless = await ensureLinuxDisplay(headless);
+	console.log(
+		`[显示] DISPLAY=${process.env.DISPLAY || '(空)'} WAYLAND_DISPLAY=${process.env.WAYLAND_DISPLAY || '(空)'} ` +
+			`XAUTHORITY=${process.env.XAUTHORITY ? '有' : '无'} headless=${headless}`
+	);
 	return new Promise<void>((resolve, reject) => {
 		// 启动前把浏览器 profile 的默认下载目录指向软件"文件下载"目录（原生下载行为落盘位置）
 		prepareDownloadPreferences(userDataDir, downloadsPath);
@@ -1044,6 +1048,8 @@ export async function launchBrowser({
 					// 显式禁用沙箱避免内置浏览器无法启动（与主进程 --no-sandbox 行为一致）；
 					// --disable-setuid-sandbox 一并关闭 setuid 沙箱助手（2.x AppImage 修复移植）
 					...(process.platform === 'linux' ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
+					// [ocs-ext] 使用 Xvfb 时强制 X11，避免继承 WAYLAND_DISPLAY 后 Chromium 走 Wayland
+					...(process.platform === 'linux' && process.env.DISPLAY && !headless ? ['--ozone-platform=x11'] : []),
 					// 浏览器增强（防休眠/防冻结）附加参数，开关关闭时为空数组
 					...formatBrowserEnhancementArgs(config),
 					...args
