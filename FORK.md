@@ -113,6 +113,8 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 - **worker 环境**：渲染进程 fork worker 时通过 IPC `getRuntimeEnv` 合并主进程的
   `DISPLAY` / `XAUTHORITY` / `PATH` 等变量，避免 Electron 渲染进程 env 不完整导致
   `xvfb-run` 启动的 OCS 仍然拿不到 DISPLAY。
+  > 2026-10-24 服务器实测：渲染进程里的 `process.env` 可能**完全为空**
+  > （`DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY` 都没有），所以不能依赖它传给 worker。
 - `.github/workflows/release.yml`：只递增第四位（四段版本号的扩展序号）。
 - **更新检测**：AppImage / Windows / macOS 走 electron-updater；**Linux deb** 走
   `ext/update/deb.ts`（electron-updater 在 Linux 只支持 AppImage），按 `latest-linux.yml`
