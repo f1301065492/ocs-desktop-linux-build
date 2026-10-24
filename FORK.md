@@ -107,7 +107,12 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
   切换到内置浏览器；内置浏览器缺失时抛 `BROWSER_VERSION_TOO_HIGH` 并提示。
 - **Linux 无图形界面**：`ext/display.ts` 在 worker 启动有头浏览器前检查 XServer：
   复用已有 Xvfb → 为当前 worker 启动独立 Xvfb → 都没有则退回 headless。
+  使用 X11 时会清掉 `WAYLAND_DISPLAY`/`XDG_SESSION_TYPE`，并给 Chromium 加
+  `--ozone-platform=x11`（避免明明有 Xvfb 却去连 Wayland）。
   deb 的 `depends` 已包含 `xvfb`；AppImage/手动部署需 `sudo apt install -y xvfb`。
+- **worker 环境**：渲染进程 fork worker 时通过 IPC `getRuntimeEnv` 合并主进程的
+  `DISPLAY` / `XAUTHORITY` / `PATH` 等变量，避免 Electron 渲染进程 env 不完整导致
+  `xvfb-run` 启动的 OCS 仍然拿不到 DISPLAY。
 - `.github/workflows/release.yml`：只递增第四位（四段版本号的扩展序号）。
 - **更新检测**：AppImage / Windows / macOS 走 electron-updater；**Linux deb** 走
   `ext/update/deb.ts`（electron-updater 在 Linux 只支持 AppImage），按 `latest-linux.yml`
