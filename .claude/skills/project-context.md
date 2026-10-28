@@ -1,6 +1,6 @@
 # OCS Desktop — 项目技能文档
 
-> ⚠️ **2026-10-24 已同步上游 3.x（v3.1.0）**：构建链改为 **electron-vite**（主进程/渲染进程产物在
+> ⚠️ **2026-10-28 已同步上游 3.6.0**：构建链改为 **electron-vite**（主进程/渲染进程产物在
 > `packages/app/out/`，打包输出仓库根 `releases/`），跨进程类型契约下沉到 `@ocs-desktop/common`，
 > 自动更新改为 electron-updater。本文档中与构建/打包/类型位置相关的旧描述以仓库根
 > `package.json`、`FORK.md` 与 `packages/common/src/contract.ts` 为准。
@@ -24,7 +24,7 @@
 
 | 层级      | 技术                                   |
 | --------- | -------------------------------------- |
-| 框架      | Electron 35 + Vue 3.3                  |
+| 框架      | Electron 43 + Vue 3.3                  |
 | 构建      | Vite 3 (Web) + TSC + Gulp (App)        |
 | 自动化    | Playwright Core                        |
 | UI 组件库 | Arco Design Vue 2.42                   |
@@ -140,7 +140,6 @@ packages/web/src/
 │   ├── SettingPanel.vue   # 设置面板
 │   ├── Setup.vue          # 一键安装向导
 │   ├── NotificationBanner.vue # 全局 Banner 通知
-│   ├── EnvironmentAlert.vue   # 环境检测提示
 │   └── ...                # 其他通用组件
 ├── composables/           # Vue 组合式函数
 │   ├── useEntityDrag.ts   # 实体拖拽
@@ -472,7 +471,7 @@ pnpm tsc        # lint + TSC 类型检查
 ### 5.3 组件规范
 
 - UI 组件统一使用 Arco Design Vue，不从零构建基础组件。
-- 图标使用 Material Icons，通过自定义 `Icon` 组件渲染。
+- 图标统一使用 `lucide-vue-next`（组件级导入，如 `CirclePlayIcon`）；上游 3.6 起已移除 Material Icons 与 `components/Icon.vue`，扩展组件也须用 Lucide。
 - 复用组合式函数放 `composables/` 目录。
 - 跨组件状态通过 `store` (reactive) 共享，不使用事件总线。
 
@@ -613,7 +612,7 @@ app.whenReady()
 | 修改本地服务路由       | [startup.server.ts](packages/app/src/tasks/startup.server.ts)                                                   |
 | 修改脚本沙盒权限       | [sandbox.ts](packages/app/src/scripts/sandbox.ts)                                                               |
 | 修改浏览器启动流程     | [worker/index.ts](packages/app/src/worker/index.ts)                                                             |
-| 修改应用更新逻辑       | [ext/update/updater.ts](packages/app/src/ext/update/updater.ts)                                                 |
+| 修改应用更新逻辑       | [tasks/updater.ts](packages/app/src/tasks/updater.ts)、[ext/update/](packages/app/src/ext/update/)               |
 | 同步上游 / 看扩展边界  | [FORK.md](FORK.md)                                                                                              |
 | 修改 Electron 打包配置 | [electron.builder.json](packages/app/electron.builder.json)                                                     |
-| 修改 Vite 构建         | [vite.config.ts](packages/web/vite.config.ts)                                                                   |
+| 修改 Vite 构建         | [electron.vite.config.ts](packages/app/electron.vite.config.ts)                                                 |

@@ -4,7 +4,7 @@
 为了让后续合并上游更新时冲突面尽量小，**所有新增功能都放在独立的 `ext/` 目录里**，
 上游文件只保留少量带 `[ocs-ext]` 标记的钩子行。
 
-> 当前已同步到上游 `6ca8a45`（v3.1.0，2026-10-23）。最初的快照基线是 `4d3e596`（v2.13.0）。
+> 当前已同步到上游 `1cd52ba`（v3.6.0，2026-10-28）。最初的快照基线是 `4d3e596`（v2.13.0）。
 > 查当前所有钩子：`git grep -n "\[ocs-ext\]"`。
 
 ---
@@ -68,14 +68,14 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 | `packages/app/index.ts` | `startExtServices`、`shutdownExt`、`[ocs-ext]` |
 | `packages/app/src/store.ts` | `...EXT_APP_STORE_DEFAULTS` |
 | `packages/app/src/tasks/remote.register.ts` | `...EXT_METHODS`、`protectMainProcessOwnedKeys`、`attachExtIpc` |
-| `packages/app/src/tasks/updater.ts` | `getUpdateSourceConfig`（镜像作为 generic feedUrl） |
+| `packages/app/src/tasks/updater.ts` | `getUpdateSourceConfig`（镜像作为 generic feedUrl）、`getEffectiveFeedUrl`（更新弹窗的 CHANGELOG 走同一地址） |
 | `packages/app/src/worker/entry.ts` | `unhandledRejection` 兜底 |
 | `packages/common/src/contract.ts` | `clear_login_on_launch` |
 | `packages/app/src/worker/index.ts` | `listPagesExt`、`screenshotPageExt`、`clearLoginState`、`PAGE_NOTIFY_SCRIPT`、`installPageNotifier` |
-| `packages/web/src/App.vue` | `startRemoteApiWorker`、`startDshNotifyIfEnabled` |
+| `packages/web/src/App.vue` | `startRemoteApiWorker`、`startDshNotifyIfEnabled`（3.6 起上游用原生圆角窗口，原来的 `window-maximize-change` 圆角钩子已删） |
 | `packages/web/src/components/SettingPanel.vue` | `<ExtSettingsCards />`、`<ClearLoginOnLaunchSetting />` |
 | `packages/web/src/components/Title.vue` | `ocsdata:v2` 旧格式导入兼容 |
-| `packages/web/src/store/index.ts` | `DEFAULT_DSH_NOTIFY`、`clearLoginOnLaunch`、`dshNotify` 类型 |
+| `packages/web/src/store/index.ts` | `DEFAULT_DSH_NOTIFY`、`clearLoginOnLaunch`、`dshNotify` 类型（与上游 `dev` 并存） |
 | `packages/web/src/utils/remote.ts` | methods 键类型放宽（扩展 IPC 不在 common 契约内） |
 | `packages/web/src/fs/interface.ts` | `BrowserRemoteMeta`、`userscriptVersions`、`remoteMeta` |
 | `packages/web/src/fs/browser.ts` | `userscriptVersions`、`remoteMeta`、启动并发防护 |
@@ -105,8 +105,9 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
   首次启动由 `init.chrome.ts` 解压到 userData，作为「软件内置浏览器」使用。
 - 系统浏览器主版本 >137 时（Chrome 137 后禁止命令行加载扩展），渲染进程启动前会自动
   切换到内置浏览器；内置浏览器缺失时抛 `BROWSER_VERSION_TOO_HIGH` 并提示。
-- **Linux 无图形界面**：`ext/display.ts` 在 worker 启动有头浏览器前检查 XServer：
-  复用已有 Xvfb → 为当前 worker 启动独立 Xvfb → 都没有则退回 headless。
+- **Linux 无图形界面**：`ext/display.ts` 在 worker 启动有头浏览器前检查显示环境：
+  可用 Wayland 会话（`WAYLAND_DISPLAY` socket 存在）→ 不动环境，交给 Chromium 的
+  `--ozone-platform-hint=auto`；否则复用已有 Xvfb → 为当前 worker 启动独立 Xvfb → 都没有则退回 headless。
   使用 X11 时会清掉 `WAYLAND_DISPLAY`/`XDG_SESSION_TYPE`，并给 Chromium 加
   `--ozone-platform=x11`（避免明明有 Xvfb 却去连 Wayland）。
   deb 的 `depends` 已包含 `xvfb`；AppImage/手动部署需 `sudo apt install -y xvfb`。
