@@ -82,3 +82,9 @@ jobs:
     with:
       ref: ${{ needs.prepare.outputs.tag }}
       release-tag: ${{ needs.prepare.outputs.tag }}
+
+  # 发布完成后立刻让 VPS 自建更新源同步最新 Release（不必等每日定时任务）
+  sync-mirror:
+    needs: build-and-publish
+    uses: ./.github/workflows/sync-mirror.yml
+    secrets: inherit

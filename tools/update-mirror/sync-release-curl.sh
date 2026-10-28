@@ -59,6 +59,13 @@ WANT="$(sed -n 's/^sha512:[[:space:]]*//p' "$TMP/latest-linux.yml" | head -n1)"
 
 DEB="ocs-${VER}-setup-linux-amd64.deb"
 
+# 版本没变且文件齐全时直接退出：定时任务/发版触发都会频繁调用，避免重复拉 500MB+
+LOCAL_VER="$(sed -n 's/^version:[[:space:]]*//p' "$DIR/latest-linux.yml" 2>/dev/null | head -n1 || true)"
+if [ "${FORCE:-0}" != "1" ] && [ "$LOCAL_VER" = "$VER" ] && [ -f "$DIR/$APP" ] && [ -f "$DIR/$DEB" ]; then
+	log "已是最新 $VER，跳过下载"
+	exit 0
+fi
+
 log "下载 $APP"
 curl -fL --retry 5 --retry-delay 3 --connect-timeout 20 -C - -o "$TMP/$APP" "$BASE/$APP"
 GOT="$(openssl dgst -sha512 -binary "$TMP/$APP" | base64 -w0)"

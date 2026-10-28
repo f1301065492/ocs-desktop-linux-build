@@ -1,0 +1,48 @@
+name: Sync Update Mirror
+
+# 发版后立即让 VPS 的自建更新源同步最新 Release（替代等待每日定时任务）。
+# release.yml 在构建发布完成后会调用本工作流；也可以手动触发补同步。
+#
+# 依赖的仓库 Secrets：
+#   VPS_SYNC_SSH_KEY  专用 ed25519 私钥（VPS 侧 authorized_keys 里限制为只能执行
+#                     /usr/local/bin/ocs-sync-release.sh，禁止端口转发/pty）
+#   VPS_SYNC_HOST / VPS_SYNC_PORT / VPS_SYNC_USER
+#
+# 同步脚本本身会先比对版本号，已经是最新时直接退出（不重复下载 500MB+）。
+
+on:
+  workflow_call: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Trigger VPS mirror sync
+        env:
+          SSH_KEY: ${{ secrets.VPS_SYNC_SSH_KEY }}
+          SSH_HOST: ${{ secrets.VPS_SYNC_HOST }}
+          SSH_PORT: ${{ secrets.VPS_SYNC_PORT }}
+          SSH_USER: ${{ secrets.VPS_SYNC_USER }}
+        run: |
+          set -euo pipefail
+          : "${SSH_KEY:?缺少 Secret VPS_SYNC_SSH_KEY}"
+          : "${SSH_HOST:?缺少 Secret VPS_SYNC_HOST}"
+          : "${SSH_PORT:?缺少 Secret VPS_SYNC_PORT}"
+          : "${SSH_USER:?缺少 Secret VPS_SYNC_USER}"
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/vps_sync
+          chmod 600 ~/.ssh/vps_sync
+
+          # VPS 上的 authorized_keys 把该密钥限制为只执行同步脚本，
+          # 这里的参数会被 sshd 忽略（脚本不传 tag 时自动取 latest）。
+          ssh -i ~/.ssh/vps_sync -p "$SSH_PORT" \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=20 \
+            -o BatchMode=yes \
+            "$SSH_USER@$SSH_HOST" sync

@@ -30,9 +30,19 @@ sudo bash sync-release-curl.sh v3.6.0.1     # 或指定 tag
 ```
 
 脚本会下载 `latest-linux.yml`、AppImage、deb、`CHANGELOG.md`，按清单里的 sha512 校验
-AppImage，原子替换根目录文件，并删除旧版本的安装包。当前 VPS 上安装在
-`/usr/local/bin/ocs-sync-release.sh`，由 `/etc/cron.d/ocs-update-sync` 每天 04:17 执行，
-日志写到 `/var/log/ocs-update-sync.log`。
+AppImage，原子替换根目录文件，并删除旧版本的安装包。版本未变且文件齐全时直接跳过，
+不会重复下载。当前 VPS 上安装在 `/usr/local/bin/ocs-sync-release.sh`，由
+`/etc/cron.d/ocs-update-sync` 每天 04:17 兜底执行，日志写到 `/var/log/ocs-update-sync.log`。
+
+**发版后立即同步（不等定时）**：`.github/workflows/release.yml` 在构建发布完成后调用
+`sync-mirror.yml`，通过 SSH 执行上面的脚本。需要的仓库 Secrets：
+
+| Secret | 说明 |
+| --- | --- |
+| `VPS_SYNC_SSH_KEY` | 专用 ed25519 私钥；VPS `authorized_keys` 里限制为只能执行同步脚本 |
+| `VPS_SYNC_HOST` / `VPS_SYNC_PORT` / `VPS_SYNC_USER` | VPS 地址、SSH 端口、登录用户 |
+
+手动补同步：`gh workflow run sync-mirror.yml`。定时任务保留作兜底（例如 Actions 失败）。
 
 **方式二：gh（本机已登录 GitHub CLI 时）**
 
