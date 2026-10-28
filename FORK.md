@@ -139,7 +139,12 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 - 内部 `package.json`：**`x.y.z-n`**。四段数字不是合法 semver，electron-updater 会抛
   `ERR_UPDATER_INVALID_VERSION`，所以第四位用预发布位表示；界面与 `/health` 展示时把 `-n` 转成 `.n`。
 - `release.yml` 只递增第四位；`upstream-sync` 合并成功后把前三段更新为上游版本，核心变化时第四位归零。
-- 发布 Linux 包时必须同时上传 `latest-linux.yml`（工作流会在 electron-builder 未生成时按 AppImage 现算）。
+- 发布 Linux 包时必须同时上传 `latest-linux.yml`（工作流会在 electron-builder 未生成时按 AppImage 现算）；
+  同时上传仓库根的 `CHANGELOG.md`，更新弹窗按 `${更新源}/CHANGELOG.md` 拉取版本日志。
+- **发版后必须给出卸载原版/旧版的命令**（2026-10-28 定，发版流程的一部分）：
+  Linux deb `sudo apt remove --purge ocs-desktop`；AppImage/手动安装删除 AppImage、桌面项与 `/opt/OCS Desktop`；
+  Windows 用「设置 → 应用」或 `Uninstall OCS Desktop.exe`。并说明 `~/.config/OCS Desktop`
+  （配置、浏览器分身、已装脚本）是否保留。
 
 `.github/workflows/upstream-sync.yml` 每天 03:17 UTC 检查一次上游 `main`：
 
