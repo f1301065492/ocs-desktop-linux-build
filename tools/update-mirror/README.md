@@ -22,7 +22,19 @@ GitHub Releases 在国内下载很慢。这个目录提供一套最小可用的�
 
 ## 同步
 
-在 VPS 上（需要 `gh` 已登录）：
+**方式一：curl（VPS 上没有 gh 时用这个，推荐）**
+
+```bash
+sudo bash sync-release-curl.sh              # 同步最新 release
+sudo bash sync-release-curl.sh v3.6.0.1     # 或指定 tag
+```
+
+脚本会下载 `latest-linux.yml`、AppImage、deb、`CHANGELOG.md`，按清单里的 sha512 校验
+AppImage，原子替换根目录文件，并删除旧版本的安装包。当前 VPS 上安装在
+`/usr/local/bin/ocs-sync-release.sh`，由 `/etc/cron.d/ocs-update-sync` 每天 04:17 执行，
+日志写到 `/var/log/ocs-update-sync.log`。
+
+**方式二：gh（本机已登录 GitHub CLI 时）**
 
 ```bash
 sudo bash sync-release.sh v2.13.25
@@ -42,6 +54,37 @@ sudo bash sync-release.sh v2.13.25
 
 如果 VPS 访问 GitHub 也不快，可以在能访问 GitHub 的机器上 `gh release download` 后
 `scp` 过去，再手工把 `latest-linux.yml` 和安装包放到根目录。
+
+## Docker 部署（当前 VPS 的方式）
+
+用官方 `nginx:alpine` 容器只读挂载 `/srv/ocs-dl`，只监听回环，反向代理由面板/宿主机 nginx 负责：
+
+```bash
+mkdir -p /srv/ocs-dl
+docker pull nginx:alpine
+docker run -d --name ocs-update --restart unless-stopped \
+  -p 127.0.0.1:15321:80 \
+  -v /srv/ocs-dl:/usr/share/nginx/html:ro \
+  nginx:alpine
+```
+
+验证：
+
+```bash
+curl -sI http://127.0.0.1:15321/latest-linux.yml
+curl -s -o /dev/null -w '%{http_code}\n' -r 0-1023 \
+  http://127.0.0.1:15321/ocs-3.6.0-1-setup-linux-x86_64.AppImage   # 期望 206
+```
+
+容器只绑 `127.0.0.1`，外部访问必须经过宿主机反向代理（宝塔站点 → 反向代理 →
+目标 `http://127.0.0.1:15321`）。若反代挂在子路径 `/ocs/`，`proxy_pass` 末尾要带 `/`
+以去掉前缀，保证客户端请求的 `/ocs/latest-linux.yml` 落到容器的 `/latest-linux.yml`。
+nginx 静态文件原生支持 `Range`，AppImage 断点续传正常。
+
+```bash
+# 更新镜像内容后无需重启容器（只读挂载目录实时生效）
+docker logs --tail 20 ocs-update      # 看访问日志
+```
 
 ## nginx
 
