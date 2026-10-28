@@ -161,3 +161,6 @@ releases/
 交接文件.md
 OCS网关待补接口.md
 CLAUDE.md
+
+# 本地 MCP 配置（含接入凭证）：只留本地，不要提交
+.mcp.json
