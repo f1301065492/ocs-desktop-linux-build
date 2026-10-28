@@ -143,10 +143,12 @@ jobs:
           gh release create "$TAG" --title "$TAG" --generate-notes || true
 
           # 必须一起上传 latest-linux.yml：electron-updater 靠它检查/下载更新
+          # CHANGELOG.md：3.6 起更新弹窗按 `${更新源}/CHANGELOG.md` 拉取版本日志
           gh release upload "$TAG" \
             releases/*.AppImage \
             releases/*.deb \
             releases/latest-linux.yml \
+            CHANGELOG.md \
             --clobber
 
           echo "已发布: https://github.com/${{ github.repository }}/releases/tag/$TAG"
@@ -161,5 +163,6 @@ jobs:
             releases/*.AppImage
             releases/*.deb
             releases/latest-linux.yml
+            CHANGELOG.md
           if-no-files-found: error
           retention-days: 7
