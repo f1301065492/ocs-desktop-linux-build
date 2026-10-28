@@ -14,8 +14,8 @@
 
 			<Description label="连接状态">
 				<a-space>
-					<Icon
-						:type="connection.icon"
+					<component
+						:is="connection.icon"
 						:color="connection.color"
 						:size="18"
 					/>
@@ -402,7 +402,7 @@
 import { computed, onMounted, onUnmounted, reactive } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import Description from '../../components/Description.vue';
-import Icon from '../../components/Icon.vue';
+import { CheckCircleIcon, TriangleAlertIcon, CircleXIcon } from 'lucide-vue-next';
 import { remote } from '../../utils/remote';
 import { store } from '../../store';
 
@@ -466,7 +466,7 @@ const connection = computed(() => {
 	if (conn?.dshRunning && conn?.bridgeRunning) {
 		return {
 			color: 'green',
-			icon: 'check_circle',
+			icon: CheckCircleIcon,
 			text: '已连接',
 			hint: `DSH 已加载 OCS 桥接（pid ${conn.bridgePid}）。`
 		};
@@ -474,7 +474,7 @@ const connection = computed(() => {
 	if (conn?.dshRunning) {
 		return {
 			color: 'orange',
-			icon: 'warning',
+			icon: TriangleAlertIcon,
 			text: 'DSH 运行中，桥接未加载',
 			hint: '配置可能还没生效：重启 DSH 后再看。'
 		};
@@ -482,14 +482,14 @@ const connection = computed(() => {
 	if (conn?.bridgeRunning) {
 		return {
 			color: 'orange',
-			icon: 'warning',
+			icon: TriangleAlertIcon,
 			text: '桥接在运行，未检测到 DSH',
 			hint: 'DSH 可能刚退出或换成了别的用户运行。'
 		};
 	}
 	return {
 		color: 'red',
-		icon: 'error',
+		icon: CircleXIcon,
 		text: '未连接',
 		hint: '没有检测到 DSH 进程，确认它正在运行。'
 	};

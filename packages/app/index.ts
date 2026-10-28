@@ -14,6 +14,7 @@ import { initChrome } from './src/tasks/init.chrome';
 import { initCrypto } from './src/crypto';
 // [ocs-ext] 扩展服务（远程 API / SSH 隧道）
 import { startExtServices, shutdownExt } from './src/ext/boot';
+import { integrateAppImageDesktop } from './src/tasks/appimage.desktop';
 
 app.setName('OCS Desktop');
 
@@ -35,8 +36,8 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 app.disableHardwareAcceleration();
 
 if (process.platform === 'linux') {
-	// Linux 透明窗口（无边框 CSS 圆角）需要显式启用 RGBA visuals，
-	// 否则透明区域按不透明渲染，窗口四角仍是实心直角（Electron 官方要求与 disable-gpu 配合使用）
+	// enable-transparent-visuals 现仅服务于启动闪屏 loading 窗口（createLoadingWindow 仍是透明窗口），
+	// 主窗口自 Electron 43 起改用无边框不透明窗口 + roundedCorners 原生圆角，勿删此开关
 	app.commandLine.appendSwitch('enable-transparent-visuals');
 }
 
@@ -63,6 +64,8 @@ function bootstrap() {
 				})
 			),
 			task('初始化自动启动', () => autoLaunch()),
+			// AppImage 桌面集成（菜单入口/图标自注册），幂等，仅 Linux AppImage 生效
+			task('AppImage桌面集成', () => integrateAppImageDesktop()),
 			task('启动渲染进程', async () => {
 				await app.whenReady();
 				const window = createWindow();

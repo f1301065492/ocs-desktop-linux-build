@@ -55,7 +55,7 @@
 						class="ms-auto"
 						@click="switchToProfessional"
 					>
-						<Icon type="view_sidebar">专业模式</Icon>
+						<a-space size="mini"><PanelLeftIcon />专业模式</a-space>
 					</a-button>
 				</div>
 			</div>
@@ -67,12 +67,6 @@
 				:class="isTile ? 'tile-container' : 'container-md'"
 				:style="isTile ? undefined : { maxWidth: cardGridMaxWidth }"
 			>
-				<!-- 环境检测提示（平铺模式下隐藏，铺满整个区域） -->
-				<EnvironmentAlert
-					v-if="!isTile"
-					class="mb-3"
-				/>
-
 				<BeginnerGuide
 					v-if="!isTile"
 					class="mb-2"
@@ -136,7 +130,8 @@
 											v-if="!showCover(browser.uid)"
 											class="card-name-text"
 										>
-											<Icon type="web">
+											<a-space size="mini"
+												><GlobeIcon />
 												<!-- 重命名状态 -->
 												<template v-if="getBrowserInstance(browser.uid)?.renaming">
 													<a-input
@@ -150,7 +145,7 @@
 												<template v-else>
 													{{ browser.name }}
 												</template>
-											</Icon>
+											</a-space>
 										</div>
 									</template>
 
@@ -203,17 +198,17 @@
 								class="browser-card add-card"
 								@click="handleAddBrowser"
 							>
-								<Icon
-									type="add_circle_outline"
-									class="add-icon"
-								/>
-								<span class="add-text">新建浏览器</span>
+								<CirclePlusIcon class="add-icon" />
+								<span class="mb-3">新建浏览器</span>
 								<span
 									class="text-secondary"
 									style="font-size: 11px"
 								>
-									<a-tag>数据隔离</a-tag>
-									<a-tag>账号多开</a-tag>
+									特性：
+									<a-space>
+										<a-tag>数据隔离</a-tag>
+										<a-tag>账号多开</a-tag>
+									</a-space>
 								</span>
 							</div>
 						</div>
@@ -226,7 +221,6 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onActivated, watch, nextTick } from 'vue';
-import Icon from '../Icon.vue';
 import Tags from '../Tags.vue';
 import BrowserOperators from './BrowserOperators.vue';
 import { store } from '../../store';
@@ -238,9 +232,9 @@ import { BrowserOptions } from '../../fs/interface';
 import { newBrowserOrInit } from '../../utils/browser';
 import EmptyBrowserCard from '../EmptyBrowserCard.vue';
 import BeginnerGuide from '../BeginnerGuide.vue';
-import EnvironmentAlert from '../EnvironmentAlert.vue';
 import BrowserPreview from './BrowserPreview.vue';
 import { getDisplayNotes } from '../../utils/display-notes';
+import { CirclePlusIcon, PanelLeftIcon, GlobeIcon } from 'lucide-vue-next';
 
 /** 获取所有浏览器（递归） */
 const allBrowsers = computed(() => {

@@ -148,9 +148,9 @@
 						<div>自签证书的 SHA-256 指纹。</div>
 						<div>调用方应固定此指纹做校验，而不是直接关闭证书验证。</div>
 					</template>
-					<Icon
+					<CircleHelpIcon
 						class="ms-2"
-						type="help_outline"
+						:size="16"
 					/>
 				</a-popover>
 			</div>
@@ -172,7 +172,7 @@
 import { onMounted, reactive } from 'vue';
 import { Message } from '@arco-design/web-vue';
 import Description from '../../components/Description.vue';
-import Icon from '../../components/Icon.vue';
+import { CircleHelpIcon } from 'lucide-vue-next';
 import { remote } from '../../utils/remote';
 import { remoteApiState } from '../remote-api/state';
 

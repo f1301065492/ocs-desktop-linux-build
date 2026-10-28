@@ -2,14 +2,14 @@ import { UpdateInformationResource } from '@ocs-desktop/common';
 import { store } from '../store';
 import { electron } from '../utils/node';
 import { notify } from './notify';
-import { Modal } from '@arco-design/web-vue';
+import { Modal, Progress } from '@arco-design/web-vue';
 import { h } from 'vue';
 import { marked } from 'marked';
 import { remote } from './remote';
 const { ipcRenderer, shell } = electron;
 
-/** 更新弹窗的 markdown 样式（注入一次） */
-function ensureUpdaterChangelogStyle() {
+/** 更新弹窗/更新日志弹窗的 markdown 样式（注入一次，两处共用） */
+export function ensureUpdaterChangelogStyle() {
 	if (document.getElementById('updater-changelog-style')) {
 		return;
 	}
@@ -29,6 +29,7 @@ function ensureUpdaterChangelogStyle() {
 export function activeIpcRenderListener() {
 	/** 如果正在更新的话，获取更新进度 */
 	ipcRenderer.on('update-download', (e, rate, totalLength, chunkLength) => {
+		const percent = totalLength > 0 ? chunkLength / totalLength : 0;
 		notify(
 			'OCS更新程序',
 			`更新中: ${(chunkLength / 1024 / 1024).toFixed(2)}MB/${(totalLength / 1024 / 1024).toFixed(2)}MB`,
@@ -36,7 +37,18 @@ export function activeIpcRenderListener() {
 			{
 				type: 'info',
 				duration: 0,
-				close: false
+				close: false,
+				// 进度文本下方展示进度条
+				content: () =>
+					h('div', [
+						h('div', `更新中: ${(chunkLength / 1024 / 1024).toFixed(2)}MB/${(totalLength / 1024 / 1024).toFixed(2)}MB`),
+						h(Progress, {
+							percent,
+							size: 'small',
+							showText: false,
+							style: 'margin-top: 6px;'
+						})
+					])
 			}
 		);
 	});
@@ -55,7 +67,8 @@ export function activeIpcRenderListener() {
 		ensureUpdaterChangelogStyle();
 
 		Modal.confirm({
-			title: '🎉检测到版本更新🎉',
+			title: '🎉检测到版本更新：' + new_version.tag,
+			titleAlign: 'center',
 			okText: '确认更新',
 			cancelText: '下次一定',
 			maskClosable: false,
@@ -65,7 +78,6 @@ export function activeIpcRenderListener() {
 			},
 			content: () =>
 				h('div', [
-					h('div', '新版本 : ✨' + new_version.tag),
 					h('div', {
 						class: 'update-changelog-content',
 						innerHTML: marked.parse(new_version.markdown || '暂无更新日志'),

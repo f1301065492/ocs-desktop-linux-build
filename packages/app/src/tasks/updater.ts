@@ -5,14 +5,11 @@ import { gt, lte } from 'semver';
 import { Logger } from '../logger';
 import { store } from '../store';
 import { getCurrentWebContents, moveWindowToTop } from '../utils';
-import { UpdateInformationResource, OCS_UPDATER, OCS_DOWNLOAD_PAGE, AppStore } from '@ocs-desktop/common';
-import { getUpdateSourceConfig } from '../ext/update/source'; // [ocs-ext]
+import { UpdateInformationResource, OCS_DOWNLOAD_PAGE, AppStore } from '@ocs-desktop/common';
+import { getEffectiveFeedUrl, getUpdateSourceConfig } from '../ext/update/source'; // [ocs-ext]
 import { checkDebUpdate, isDebInstall, updateDebPackage } from '../ext/update/deb'; // [ocs-ext] deb 安装走自定义检查
 
 const logger = Logger('updater');
-
-/** 默认更新源目录（常量集中于 common/src/constants.ts，与 electron.builder.json publish.url 需保持同步） */
-const DEFAULT_FEED_URL = OCS_UPDATER.feedUrl;
 
 /** 保持“用户确认后才下载”的交互，由渲染层弹窗触发 downloadUpdate */
 autoUpdater.autoDownload = false;
@@ -91,9 +88,9 @@ function listenUpdaterEvents() {
 	});
 }
 
-/** 当前生效的更新源目录（测试模式可在设置中覆盖），保证以 / 结尾 */
+/** 当前生效的更新源目录：与 electron-updater 同一地址，保证 / 结尾（实现见 ext/update/source.ts） */
 function effectiveFeedUrl() {
-	return (store.store.updater?.feedUrl || DEFAULT_FEED_URL).replace(/\/?$/, '/');
+	return getEffectiveFeedUrl();
 }
 
 /**

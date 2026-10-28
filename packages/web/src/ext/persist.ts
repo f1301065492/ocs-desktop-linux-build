@@ -13,7 +13,9 @@ import { root } from '../fs/folder';
 /** 异步保存，用于实时持久化（单次 IPC 调用，加密+写入在主进程完成） */
 export async function saveStoreToLocal(_store: typeof store) {
 	try {
-		const shouldEncrypt = remote.methods.callSync('isEncryptionAvailable');
+		// 与 App.vue 一致：开发者设置里关闭「数据加密」时按明文落盘
+		const shouldEncrypt =
+			store.render.setting.dev?.dataEncryption !== false && remote.methods.callSync('isEncryptionAvailable');
 		await remote.methods.call('saveStore', JSON.stringify(_store), shouldEncrypt);
 	} catch (e) {
 		console.error(e);
@@ -23,7 +25,9 @@ export async function saveStoreToLocal(_store: typeof store) {
 /** 同步版本保存，用于关闭或需要立即落盘的场景（单次 IPC 调用） */
 export function saveStoreToLocalSync(_store: typeof store) {
 	try {
-		const shouldEncrypt = remote.methods.callSync('isEncryptionAvailable');
+		// 与 App.vue 一致：开发者设置里关闭「数据加密」时按明文落盘
+		const shouldEncrypt =
+			store.render.setting.dev?.dataEncryption !== false && remote.methods.callSync('isEncryptionAvailable');
 		remote.methods.callSync('saveStore', JSON.stringify(_store), shouldEncrypt);
 	} catch (e) {
 		console.error(e);

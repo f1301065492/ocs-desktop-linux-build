@@ -89,13 +89,30 @@ export type WebStore = {
 		};
 		/** [ocs-ext] DSH 主动通知配置 */
 		dshNotify: typeof DEFAULT_DSH_NOTIFY;
+		/** 开发者设置（界面仅在「工具 → 开发者工具」点击后显示，开关本身对所有用户生效） */
+		dev: {
+			/**
+			 * 软件辅助：开启后软件监听浏览器路由（ocs-environment / ocs-script-actions），
+			 * 与用户脚本联动提供自动化增强（点击、填写等页面动作）。
+			 * 关闭后脚本不再识别为 playwright 环境，自动化增强不可用（可用于性能排查）。
+			 * 仅对之后启动的浏览器生效。
+			 */
+			scriptAssistance: boolean;
+			/**
+			 * 文件下载优化：开启后恢复浏览器原生下载行为（气泡显示真实文件名、文件原生落盘），
+			 * 模拟真实下载；关闭后回退为 Playwright 托管下载，可能出现无法下载或文件名异常。
+			 * 仅对之后启动的浏览器生效。
+			 */
+			downloadOptimization: boolean;
+			/** 数据加密：关闭后配置数据按明文存储于 config.json（不执行加密） */
+			dataEncryption: boolean;
+		};
 	};
 
 	langs: Record<string, string>;
 	state: {
-		/** 是否展示初始化设置  */
-		setup: boolean;
-		/** 是否展示「欢迎使用」引导弹窗（首次进入且需要初始化时显示，点击「开始初始化」后关闭） */
+		/** 是否展示「欢迎使用」介绍弹窗（仅首次进入展示，纯介绍无初始化功能；
+		 *  环境检测与补全已改为启动浏览器时被动自动执行） */
 		welcome: boolean;
 		/** 是否展示「新建浏览器自动初始化」弹窗 */
 		newBrowserSetup: boolean;
@@ -182,12 +199,16 @@ export const DEFAULT_RENDER = {
 			}
 		},
 		// [ocs-ext] DSH 主动通知默认值（旧数据由 defaultsDeep 补齐）
-		dshNotify: { ...DEFAULT_DSH_NOTIFY }
+		dshNotify: { ...DEFAULT_DSH_NOTIFY },
+		// 开发者设置：三项默认开启（与历史行为一致），关闭用于 mac 卡顿等场景排查
+		dev: {
+			scriptAssistance: true,
+			downloadOptimization: true,
+			dataEncryption: true
+		}
 	},
 	langs: {},
 	state: {
-		first: true,
-		setup: true,
 		welcome: true,
 		newBrowserSetup: false,
 		mini: false,

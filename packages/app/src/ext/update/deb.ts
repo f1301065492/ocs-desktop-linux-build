@@ -1,13 +1,12 @@
 import { clipboard, dialog, shell } from 'electron';
 import axios from 'axios';
 import path from 'path';
-import fs from 'fs';
 import { gt } from 'semver';
 import type { UpdateInformationResource } from '@ocs-desktop/common';
 import { Logger } from '../../logger';
 import { store } from '../../store';
 import { downloadFile, getCurrentWebContents, moveWindowToTop } from '../../utils';
-import { getUpdateSourceConfig } from './source';
+import { getEffectiveFeedUrl } from './source';
 import { displayVersion } from '../version';
 
 const logger = Logger('updater-deb');
@@ -20,36 +19,14 @@ const logger = Logger('updater-deb');
  * 清单 latest-linux.yml 自己检查版本，再下载对应 deb 并给出 apt 安装命令。
  */
 
-/** 默认 feed（与 electron.builder.json 的 publish.url 保持一致） */
-const DEFAULT_FEED = 'https://github.com/f1301065492/ocs-desktop-linux-build/releases/latest/download';
-
 /** 是否为「Linux 且不是 AppImage 运行」 */
 export function isDebInstall(): boolean {
 	return process.platform === 'linux' && !process.env.APPIMAGE;
 }
 
-/** 读取打包时写入的 app-update.yml 里的 feed 地址，读不到则用常量 */
-function getDefaultFeed(): string {
-	try {
-		const file = path.join(process.resourcesPath, 'app-update.yml');
-		const content = fs.readFileSync(file, 'utf8');
-		const match = /^url:\s*(.+)$/m.exec(content);
-		if (match) {
-			return match[1].trim().replace(/\/+$/, '');
-		}
-	} catch {
-		// 开发环境或精简包没有该文件
-	}
-	return DEFAULT_FEED;
-}
-
-/** 当前生效的 feed 根地址（自建镜像优先） */
+/** 当前生效的 feed 根地址（自建镜像 / 自定义源 / app-update.yml 统一解析） */
 function getFeedBase(): string {
-	const cfg = getUpdateSourceConfig();
-	if (cfg.source === 'mirror' && cfg.mirrorBase) {
-		return cfg.mirrorBase.replace(/\/+$/, '');
-	}
-	return getDefaultFeed();
+	return getEffectiveFeedUrl().replace(/\/+$/, '');
 }
 
 /** deb 架构后缀（electron-builder 的命名：amd64 / arm64） */

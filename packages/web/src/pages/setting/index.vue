@@ -11,9 +11,9 @@
 					:class="{ active: activeMenu === item.key }"
 					@click="activeMenu = item.key"
 				>
-					<Icon
-						:type="item.icon"
-						:size="18"
+					<component
+						:is="item.icon"
+						style="font-size: 18px"
 						class="me-2"
 					/>
 					{{ item.title }}
@@ -33,23 +33,31 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref } from 'vue';
-import Icon from '../../components/Icon.vue';
+import { SettingsIcon, CodeIcon, Grid3x3Icon, WrenchIcon } from 'lucide-vue-next';
+import { devSession } from '../../store';
 
 /** 子设置界面（异步组件，切换到对应菜单时才加载与渲染） */
 const panels = {
 	ocs: defineAsyncComponent(() => import('../../components/setting/OcsConfigPanel.vue')),
 	'app-center': defineAsyncComponent(() => import('../../components/ResourcesCard.vue')),
-	general: defineAsyncComponent(() => import('../../components/SettingPanel.vue'))
+	general: defineAsyncComponent(() => import('../../components/SettingPanel.vue')),
+	developer: defineAsyncComponent(() => import('../../components/setting/DeveloperSettingPanel.vue'))
 };
 
-const settingMenus = [
-	{ key: 'general', title: '通用设置', icon: 'settings' },
-	{ key: 'ocs', title: '脚本配置', icon: 'code' },
-	{ key: 'app-center', title: '应用中心', icon: 'apps' }
+const allMenus = [
+	{ key: 'general', title: '通用设置', icon: SettingsIcon },
+	{ key: 'ocs', title: '脚本配置', icon: CodeIcon },
+	{ key: 'app-center', title: '应用中心', icon: Grid3x3Icon },
+	{ key: 'developer', title: '开发者设置', icon: WrenchIcon }
 ] as const;
 
+type MenuKey = (typeof allMenus)[number]['key'];
+
+/** 「开发者设置」仅在点击「工具 → 开发者工具」后显示（devSession 非持久化，重启自动隐藏） */
+const settingMenus = computed(() => allMenus.filter((m) => m.key !== 'developer' || devSession.enabled));
+
 /** 当前子菜单：默认显示通用设置 */
-const activeMenu = ref<(typeof settingMenus)[number]['key']>('general');
+const activeMenu = ref<MenuKey>('general');
 
 const activePanel = computed(() => panels[activeMenu.value]);
 </script>
@@ -78,7 +86,7 @@ const activePanel = computed(() => panels[activeMenu.value]);
 
 /* 左侧子菜单栏（与内容区同背景，仅以分割线区分） */
 .setting-sider {
-	width: 128px;
+	width: 150px;
 	flex-shrink: 0;
 	padding: 12px 6px;
 	border-right: 1px solid var(--theme-border-color-light);

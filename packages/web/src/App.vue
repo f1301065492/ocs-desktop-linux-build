@@ -33,9 +33,10 @@
 				</div>
 			</a-modal>
 
-			<!-- 全局：欢迎使用引导（首次进入时于初始化弹窗之前展示） -->
+			<!-- 全局：欢迎使用介绍（仅首次进入展示，纯介绍无初始化功能；
+			     环境检测与补全在启动浏览器时自动执行，见 utils/env-bootstrap.ts） -->
 			<a-modal
-				:visible="store.render.state.welcome && store.render.state.setup"
+				:visible="store.render.state.welcome"
 				:footer="false"
 				:closable="false"
 				:mask-closable="false"
@@ -51,12 +52,12 @@
 						{{
 							t(
 								'welcome_desc',
-								'OCS 桌面软件是一款浏览器自动化工具，可以帮助你自动初始化浏览器环境、脚本管理器拓展与用户脚本，支持浏览器多开管理、自动登录、自动安装用户脚本等，让浏览器自动化变得简单高效。'
+								'OCS 桌面软件是一款浏览器自动化工具，支持浏览器多开管理、自动登录、自动安装用户脚本等，让浏览器自动化变得简单高效。'
 							)
 						}}
 					</p>
 					<p class="welcome-tip">
-						{{ t('welcome_init_tip', '使用软件前需要初始化一下环境，点击下方按钮开始！') }}
+						{{ t('welcome_init_tip', '无需任何手动设置，启动浏览器时将自动完成环境检测与补全。') }}
 					</p>
 					<div
 						class="text-center"
@@ -67,33 +68,11 @@
 							size="large"
 							@click="store.render.state.welcome = false"
 						>
-							{{ t('welcome_start_btn', '开始初始化') }}
+							{{ t('welcome_start_btn', '开始使用') }}
 						</a-button>
 					</div>
 				</div>
 			</a-modal>
-
-			<!-- 全局：一键安装 -->
-			<template v-if="!store.render.state.welcome">
-				<Setup
-					v-model:visible="store.render.state.setup"
-					:auto-setup="true"
-					:preset-steps="[
-						'show_desc',
-						'init_env',
-						'new_browser',
-						'init_automationScript',
-						'init_extensions',
-						'init_script',
-						'update_env'
-					]"
-					@finish="
-						() => {
-							store.render.state.setup = false;
-						}
-					"
-				></Setup>
-			</template>
 
 			<!-- 全局：新建浏览器自动初始化（仅打开时挂载，避免启动即运行初始化流程并永久挂起） -->
 			<Setup
@@ -138,6 +117,7 @@ import {
 } from './utils';
 import { activeIpcRenderListener } from './utils/ipc';
 import { getWindowsRelease } from './utils/os';
+import { notify } from './utils/notify';
 import { currentBrowser } from './fs';
 import { Modal, Message } from '@arco-design/web-vue';
 import zhCN from '@arco-design/web-vue/es/locale/lang/zh-cn';
@@ -153,10 +133,15 @@ import { startDshNotifyIfEnabled } from './ext/dsh/autostart';
 
 const { ipcRenderer } = electron;
 
+/** 是否启用加密存储：开发者设置「数据加密」开关 + 主密钥就绪（两者同时成立才加密） */
+function isEncryptionEnabled() {
+	return store.render.setting.dev?.dataEncryption !== false && remote.methods.callSync('isEncryptionAvailable');
+}
+
 /** 异步保存，用于实时持久化（单次 IPC 调用，加密+写入在主进程完成） */
 async function saveStoreToLocal(_store: typeof store) {
 	try {
-		const shouldEncrypt = remote.methods.callSync('isEncryptionAvailable');
+		const shouldEncrypt = isEncryptionEnabled();
 		await remote.methods.call('saveStore', JSON.stringify(_store), shouldEncrypt);
 	} catch (e) {
 		console.error(e);
@@ -166,7 +151,7 @@ async function saveStoreToLocal(_store: typeof store) {
 /** 同步版本保存，用于关闭时确保数据写入磁盘（单次 IPC 调用） */
 function saveStoreToLocalSync(_store: typeof store) {
 	try {
-		const shouldEncrypt = remote.methods.callSync('isEncryptionAvailable');
+		const shouldEncrypt = isEncryptionEnabled();
 		remote.methods.callSync('saveStore', JSON.stringify(_store), shouldEncrypt);
 	} catch (e) {
 		console.error(e);
@@ -203,11 +188,6 @@ onMounted(async () => {
 	/** [ocs-ext] 若在设置里开启了主动通知（DSH），随应用启动拉起 ocs-watch */
 	startDshNotifyIfEnabled();
 
-	/** Linux 透明圆角窗口：最大化时去除圆角（直角铺满屏幕） */
-	ipcRenderer.on('window-maximize-change', (_e, maximized: boolean) => {
-		document.documentElement.classList.toggle('window-maximized', maximized);
-	});
-
 	/** 监听屏幕变化 */
 	onResize();
 	window.addEventListener('resize', onResize);
@@ -215,8 +195,8 @@ onMounted(async () => {
 	/** 获取远程语言 */
 	fetchRemoteLangs().catch(console.error);
 
-	// 首次初始化不显示通知。
-	if (!store.render.state.setup) {
+	// 首次进入（欢迎弹窗展示期间）不显示通知。
+	if (!store.render.state.welcome) {
 		/** 获取最新远程通知 */
 		fetchRemoteNotify(false).catch(console.error);
 	}
@@ -225,6 +205,21 @@ onMounted(async () => {
 	remote.methods.call('statisticFolderSize', store.paths.userDataDirsFolder).then((totalSize) => {
 		if (totalSize > 1024 * 1024 * 1024 * (store.render.setting.browser.cachesSizeWarningPoint ?? 10)) {
 			showClearBrowserCachesModal(totalSize);
+		}
+	});
+
+	/** Linux 密钥环检测：basic_text 表示无可用密钥环（gnome-keyring/kwallet），
+	 *  信封加密的密钥包裹将退化为明文存储，引导用户安装 */
+	remote.os.call('platform').then(async (platform) => {
+		if (platform !== 'linux') return;
+		const backend = await remote.methods.call('getStorageBackend');
+		if (backend === 'basic_text') {
+			notify(
+				'系统未检测到密钥环',
+				'数据加密保护将降级为基础模式。建议安装密钥环：GNOME/Debian 系执行 sudo apt install gnome-keyring，KDE 安装 kwallet，安装后重启软件生效。',
+				'keyring-missing',
+				{ type: 'warning', duration: 10 * 1000, copy: false }
+			);
 		}
 	});
 
@@ -374,32 +369,6 @@ function onResize() {
 <style lang="less">
 @import '@/assets/css/bootstrap.min.css';
 @import '@/assets/css/common.css';
-
-/* Linux 无边框透明窗口：系统不提供原生圆角（Win11/macOS 由系统绘制），用 CSS 圆角 + 细描边模拟。
-   注意两个 CSS 传播陷阱，圆角必须设在 #app 而非 body/html：
-   1. body/html 的背景会传播到整个画布（含圆角之外的区域），四角被画布背景填满；
-   2. html 的 overflow 为 visible 时，body 的 overflow 同样会传播到视口，body 自身不建立裁剪，
-      border-radius 形同虚设。#app 是普通元素，无传播规则，圆角裁剪可靠生效 */
-body.platform-linux {
-	/* 覆盖 bootstrap 与 theme.less 中 body 的背景色，防止传播到画布 */
-	background-color: transparent !important;
-}
-body.platform-linux #app {
-	border-radius: 12px;
-	overflow: hidden;
-	background-color: #ffffff;
-	/* 用内阴影模拟描边：border 会占用布局空间导致内容与窗口边缘错位 */
-	box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
-}
-body.platform-linux[arco-theme='dark'] #app {
-	background-color: #2c2c2c;
-	box-shadow: inset 0 0 0 1px #4b4848;
-}
-/* 最大化时去除圆角与描边，直角铺满屏幕 */
-html.window-maximized body.platform-linux #app {
-	border-radius: 0;
-	box-shadow: none;
-}
 
 /* 全局状态栏：固定右下角，宽度自适应内容，向左扩展不遮挡右侧边缘 */
 .status-bar-container {

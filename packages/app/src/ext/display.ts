@@ -4,8 +4,9 @@ import fs from 'fs';
 /**
  * Linux 无图形界面时给 Playwright 准备一个 XServer。
  *
- * 背景：Playwright 启动有头 Chromium 时必须有可用的 X display；服务器/容器里
+ * 背景：Playwright 启动有头 Chromium 时必须有可用的显示；服务器/容器里
  * 通常没有。这里按以下顺序处理：
+ *   0. 已有可用 Wayland 会话 → 不动环境，交给 Chromium 的 --ozone-platform-hint=auto；
  *   1. 现有 DISPLAY 有效（本地 :N 且 socket 存在）→ 直接用；
  *   2. 机器上已有其他 Xvfb（/tmp/.X11-unix/X99…）→ 复用；
  *   3. 启动一个仅本 worker 使用的 Xvfb（独立 display 号）；
@@ -65,12 +66,37 @@ function waitForSocket(displayNumber: number, timeoutMs: number, aborted: () => 
 }
 
 /**
+ * 是否是可用的 Wayland 会话。
+ *
+ * 有 Wayland socket 时不应强行拉 Xvfb：Chromium 3.6 起带 `--ozone-platform-hint=auto`，
+ * 会自动优先 Wayland，既避免额外进程，也让纯 Wayland 桌面（无 XWayland）正常有头启动。
+ */
+function hasWayland(): boolean {
+	const name = process.env.WAYLAND_DISPLAY;
+	if (!name) return false;
+	try {
+		if (name.startsWith('/')) {
+			return fs.existsSync(name);
+		}
+		const runtimeDir = process.env.XDG_RUNTIME_DIR;
+		return !!runtimeDir && fs.existsSync(`${runtimeDir}/${name}`);
+	} catch {
+		return false;
+	}
+}
+
+/**
  * 确保 Linux 上有可用的 XServer。
  * @returns 实际应使用的 headless 值（没有可用 X 且无法启动 Xvfb 时为 true）
  */
 export async function ensureLinuxDisplay(headless: boolean): Promise<boolean> {
 	if (process.platform !== 'linux' || headless) {
 		return headless;
+	}
+
+	if (hasWayland()) {
+		console.log(`[显示] 检测到 Wayland 会话（WAYLAND_DISPLAY=${process.env.WAYLAND_DISPLAY}），交给 Chromium 自动选择`);
+		return false;
 	}
 
 	const currentDisplay = process.env.DISPLAY;

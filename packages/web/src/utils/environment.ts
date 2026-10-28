@@ -1,7 +1,7 @@
 import { getRemoteInfos } from '.';
 import { store } from '../store';
 import { remote } from './remote';
-import { Infos, ResourceFile } from '@ocs-desktop/common';
+import { Infos, ResourceFile, SUPPORTED_BROWSER_MAX_MAJOR } from '@ocs-desktop/common/web';
 import { ResourceLoader } from './resources.loader';
 import _get from 'lodash/get';
 import { ref } from 'vue';
@@ -54,9 +54,9 @@ export const Environment = {
 		// 排序版本，从大到小
 		browsers = browsers.sort((a, b) => (b.major_version || 0) - (a.major_version || 0));
 
-		if (browsers.some((b) => b.major_version && b.major_version <= 137)) {
+		if (browsers.some((b) => b.major_version && b.major_version <= SUPPORTED_BROWSER_MAX_MAJOR)) {
 			const valid_version_browser = browsers.find(
-				(_, i) => browsers?.[i] && (browsers?.[i].major_version || 999) <= 137
+				(_, i) => browsers?.[i] && (browsers?.[i].major_version || 999) <= SUPPORTED_BROWSER_MAX_MAJOR
 			);
 			return valid_version_browser;
 		}
@@ -67,7 +67,7 @@ export const Environment = {
 		const current_browser_path = store.render.setting.launchOptions.executablePath;
 		if (!current_browser_path) return false;
 		const current_browser_version = await remote.methods.call('getBrowserMajorVersion', current_browser_path);
-		if (current_browser_version && current_browser_version <= 137) {
+		if (current_browser_version && current_browser_version <= SUPPORTED_BROWSER_MAX_MAJOR) {
 			return true;
 		}
 		return false;
@@ -104,6 +104,10 @@ export const Environment = {
 				if (!remote.fs.callSync('existsSync', manifestPath)) {
 					continue;
 				}
+				// manifest.json 可能是目录（残留污染/异常压缩包产生），readFileSync 目录会抛 EISDIR 弹错
+				if (remote.methods.callSync('isDirectory', manifestPath)) {
+					continue;
+				}
 				manifest = JSON.parse(String(await remote.fs.call('readFileSync', manifestPath, 'utf-8')));
 			} catch {
 				// manifest.json 不存在或解析失败（如 OCR 等非扩展文件夹），跳过该候选
@@ -127,6 +131,8 @@ export const Environment = {
 				const manifestPath = await remote.path.call('join', extensionPath, 'manifest.json');
 				const exists = await remote.fs.call('existsSync', manifestPath);
 				if (!exists) continue;
+				// 同上：manifest.json 为目录时跳过，避免 readFileSync 抛 EISDIR 弹错
+				if (remote.methods.callSync('isDirectory', manifestPath)) continue;
 
 				const manifest = JSON.parse(String(await remote.fs.call('readFileSync', manifestPath, 'utf-8')));
 				if (_get(manifest, 'manifest_version', 2) >= 3) {

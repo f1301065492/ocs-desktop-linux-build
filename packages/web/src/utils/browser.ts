@@ -1,6 +1,5 @@
 import { h } from 'vue';
 import { Button, Message, Modal, Space } from '@arco-design/web-vue';
-import { IconSync } from '@arco-design/web-vue/es/icon';
 import { size, sleep } from '.';
 import { remote } from './remote';
 import { store } from '../store';
@@ -13,6 +12,8 @@ import { currentFolder } from '../fs';
 import type { RawAutomationScript } from '@ocs-desktop/common/web';
 import { Tag, BrowserRemoteMeta } from '../fs/interface';
 import { resetSearch } from './entity';
+import { ensureEnvironmentReady } from './env-bootstrap';
+import { LoaderCircleIcon } from 'lucide-vue-next';
 const { shell } = electron;
 
 /**
@@ -149,10 +150,18 @@ export function newBrowser(opts?: {
 }
 
 /**
- * 新建浏览器：打开「新建浏览器自动初始化」弹窗并自动执行初始化流程（新建浏览器 + 添加自动化程序）。
+ * 新建浏览器：先做被动环境检测与自动补全（复用启动链路的 ensureEnvironmentReady，
+ * 避免浏览器路径未配置时流程走到「新建浏览器」步骤才报错），
+ * 环境就绪后打开「新建浏览器自动初始化」弹窗并自动执行流程（新建浏览器 + 添加自动化程序）。
  * 浏览器名称由命名算法自动生成（流程内不再询问），如需自定义可在浏览器列表中重命名。
  */
-export function newBrowserOrInit(): void {
+export async function newBrowserOrInit(): Promise<void> {
+	try {
+		await ensureEnvironmentReady();
+	} catch (e: any) {
+		Message.error('环境准备失败，请稍后重试：' + (e?.message || String(e)));
+		return;
+	}
 	store.render.state.newBrowserSetup = true;
 }
 
@@ -163,7 +172,7 @@ export async function checkBrowserCaches() {
 		footer: false,
 		maskClosable: false,
 		content: () => {
-			return h('div', [h(IconSync, { spin: true }), '正在计算浏览器缓存...']);
+			return h('div', [h(LoaderCircleIcon, { class: 'icon-spin' }), '正在计算浏览器缓存...']);
 		}
 	});
 	const totalSize = await remote.methods.call('statisticFolderSize', store.paths.userDataDirsFolder);
@@ -252,7 +261,7 @@ export function clearAllBrowserCaches(userDataDirsFolder: string, uids: string[]
 export async function forceClearBrowserCache(title: string, userDataDirsFolder: string) {
 	const modal = Modal.warning({
 		title: '提示',
-		content: () => h('div', [h(IconSync, { spin: true }), title]),
+		content: () => h('div', [h(LoaderCircleIcon, { class: 'icon-spin' }), title]),
 		maskClosable: false,
 		closable: false,
 		footer: false

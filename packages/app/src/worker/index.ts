@@ -1,5 +1,5 @@
 import { Instance as Chalk } from 'chalk';
-import { LoggerCore, DEFAULT_SERVER_PORT } from '@ocs-desktop/common';
+import { LoggerCore, DEFAULT_SERVER_PORT, SUPPORTED_BROWSER_MAX_MAJOR } from '@ocs-desktop/common';
 import path, { basename } from 'path';
 import fs from 'fs';
 import { chromium, BrowserContext, Page, LaunchOptions, Response, Request, CDPSession } from 'playwright-core';
@@ -31,6 +31,10 @@ type BrowserConfig = {
 	screenshot_preview?: boolean;
 	/** 浏览器增强（防休眠/防冻结）：附加防节流启动参数 + 注入静音音频豁免脚本 */
 	browser_enhancement?: boolean;
+	/** 软件辅助：监听浏览器路由与用户脚本联动（默认开启，关闭后自动化增强不可用） */
+	script_assistance?: boolean;
+	/** 文件下载优化：恢复浏览器原生下载行为（默认开启，关闭后可能无法下载文件） */
+	download_optimization?: boolean;
 	/** [ocs-ext] 启动前清除该浏览器的登录状态（cookie / 站点本地存储） */
 	clear_login_on_launch?: boolean;
 };
@@ -184,7 +188,7 @@ export class ScriptWorker implements ScriptWorkerContract {
 		if (process.platform === 'win32') {
 			const major = getBrowserMajorVersion(options.executablePath);
 			console.log('major', major);
-			if (major && major > 137) {
+			if (major && major > SUPPORTED_BROWSER_MAX_MAJOR) {
 				console.error(
 					ScriptWorker.lang(
 						'error_when_browser_version_too_high',
@@ -1047,7 +1051,16 @@ export async function launchBrowser({
 					// 且 Ubuntu 23.10+ AppArmor 限制非受限程序创建 user namespace（兜底方案同样被封堵），
 					// 显式禁用沙箱避免内置浏览器无法启动（与主进程 --no-sandbox 行为一致）；
 					// --disable-setuid-sandbox 一并关闭 setuid 沙箱助手（2.x AppImage 修复移植）
-					...(process.platform === 'linux' ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
+					...(process.platform === 'linux'
+						? [
+								'--no-sandbox',
+								'--disable-setuid-sandbox',
+								// 纯 Wayland 桌面会话无 DISPLAY：主进程（Electron 原生 Wayland）正常，
+								// 但拉起的 Chrome 默认走 X11，报 "Missing X server" 崩溃。
+								// 该参数让 Chrome 优先使用 Wayland（WAYLAND_DISPLAY），无则回退 X11
+								'--ozone-platform-hint=auto'
+						  ]
+						: []),
 					// [ocs-ext] 使用 Xvfb 时强制 X11，避免继承 WAYLAND_DISPLAY 后 Chromium 走 Wayland
 					...(process.platform === 'linux' && process.env.DISPLAY && !headless ? ['--ozone-platform=x11'] : []),
 					// 浏览器增强（防休眠/防冻结）附加参数，开关关闭时为空数组
@@ -1059,7 +1072,9 @@ export async function launchBrowser({
 				// 恢复浏览器原生下载行为（behavior:'default'，保留 download 事件）：
 				// 下载气泡显示真实文件名、文件原生落盘到"文件下载"目录；
 				// 事件仍触发，供 page.on('download') 截胡转发到本地默认浏览器（取消失败时原生落盘兜底）
-				const nativeDownloadRestored = await restoreNativeDownloadBehavior(browser);
+				// 「文件下载优化」开关关闭时跳过：保持 Playwright 托管下载（由 saveAs 兜底落盘）
+				const nativeDownloadRestored =
+					config?.download_optimization === false ? false : await restoreNativeDownloadBehavior(browser);
 
 				// 处理浏览器初始（下载处理：http(s) 链接交给本地默认浏览器；blob/data 经本地代理转发）
 				handleBrowserInit(browser, {
@@ -1093,7 +1108,12 @@ export async function launchBrowser({
 					waitAndCloseExtensionHomepage({ browser, closeableExtensionHomepages });
 
 					// 监听网络请求（注册快且自动化程序依赖，放关键段）
-					browserNetworkRoute(authToken, browser);
+					// 「软件辅助」开关关闭时不注册路由：脚本不再识别为软件环境，自动化增强不可用
+					if (config?.script_assistance === false) {
+						console.log('软件辅助已关闭：跳过浏览器路由监听，脚本自动化增强不可用');
+					} else {
+						browserNetworkRoute(authToken, browser);
+					}
 
 					// 关键路径就绪：立即通知渲染进程浏览器已可用（launched）。
 					// 用户脚本安装与自动化登录耗时随网络波动大（弱网可达分钟级），转入后台执行，

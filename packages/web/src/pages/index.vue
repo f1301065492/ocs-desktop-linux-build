@@ -35,10 +35,9 @@
 									:content="item.meta.title"
 									position="right"
 								>
-									<Icon
+									<component
+										:is="ROUTE_ICONS[item.meta.icon]"
 										class="icon"
-										:type="item.meta.icon"
-										theme="outlined"
 									/>
 								</Tooltip>
 							</div>
@@ -67,9 +66,16 @@ import { ref, reactive } from 'vue';
 import { RouteRecordRaw, useRouter } from 'vue-router';
 import { routes, CustomRouteType, router } from '../route';
 import { remote } from '../utils/remote';
-import Icon from '../components/Icon.vue';
+import { ListIcon, CodeIcon, SettingsIcon } from 'lucide-vue-next';
 import { Tooltip } from '@arco-design/web-vue';
 import CommonEditActionDropdown from '../components/CommonEditActionDropdown.vue';
+
+/** 路由 meta.icon 字符串 → 组件（config 的路由图标可用值即此表的 key） */
+const ROUTE_ICONS: Record<string, any> = {
+	view_list: ListIcon,
+	code: CodeIcon,
+	settings: SettingsIcon
+};
 
 // 当前路由
 const currentRoute = useRouter().currentRoute;
@@ -94,6 +100,8 @@ function clickMenu(route: RouteRecordRaw & { meta: { title: string } }) {
 
 <style lang="less">
 .sider {
+	/* 为内部绝对定位元素（.version 等）提供定位上下文；win/mac 视觉无变化 */
+	position: relative;
 	-webkit-app-region: no-drag;
 	user-select: none;
 	padding: 4px 24px 4px 0px;

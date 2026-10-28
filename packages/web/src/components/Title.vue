@@ -19,25 +19,31 @@
 			<span class="title-item"> 工具 </span>
 			<template #content>
 				<a-doption style="width: 200px"> </a-doption>
-
-				<a-doption @click="openSetup"> <Icon type="settings">初始化设置</Icon> </a-doption>
 				<a-doption
 					class="border-bottom"
 					@click="checkBrowserCaches"
 				>
-					<Icon type="delete">清除浏览器缓存</Icon>
+					<a-space size="mini"><Trash2Icon />清除浏览器缓存</a-space>
 				</a-doption>
 
-				<a-doption @click="exportData"> <Icon type="save">导出数据</Icon> </a-doption>
+				<a-doption @click="exportData">
+					<a-space size="mini"><SaveIcon />导出数据</a-space>
+				</a-doption>
 				<a-doption
 					class="border-bottom"
 					@click="importData"
 				>
-					<Icon type="upload">导入数据</Icon>
+					<a-space size="mini"><UploadIcon />导入数据</a-space>
 				</a-doption>
-				<a-doption @click="relaunch"> <Icon type="sync">重启软件</Icon> </a-doption>
-				<a-doption @click="openLog"> <Icon type="folder">日志目录</Icon> </a-doption>
-				<a-doption @click="openDevTools"> <Icon type="code">开发者工具</Icon> </a-doption>
+				<a-doption @click="relaunch">
+					<a-space size="mini"><RefreshCwIcon />重启软件</a-space>
+				</a-doption>
+				<a-doption @click="openLog">
+					<a-space size="mini"><FolderIcon />日志目录</a-space>
+				</a-doption>
+				<a-doption @click="openDevTools">
+					<a-space size="mini"><CodeIcon />开发者工具</a-space>
+				</a-doption>
 			</template>
 		</a-dropdown>
 
@@ -53,15 +59,19 @@
 					style="width: 200px"
 					@click="about"
 				>
-					<Icon type="book">使用教程</Icon>
+					<a-space size="mini"><BookIcon />使用教程</a-space>
 				</a-doption>
-				<a-doption @click="allNotify"> <Icon type="notes">查看通知</Icon> </a-doption>
+				<a-doption @click="allNotify">
+					<a-space size="mini"><NotepadTextIcon />查看通知</a-space>
+				</a-doption>
 
-				<a-doption @click="showVersionLogs"> <Icon type="notes">更新日志</Icon> </a-doption>
+				<a-doption @click="showVersionLogs">
+					<a-space size="mini"><NotepadTextIcon />更新日志</a-space>
+				</a-doption>
 
 				<TitleLink :url="OCS_WEBSITE + '/'">
 					<template #title>
-						<Icon type="home">软件官网</Icon>
+						<a-space size="mini"><HouseIcon />软件官网</a-space>
 					</template>
 				</TitleLink>
 			</template>
@@ -74,11 +84,14 @@
 
 <script setup lang="ts">
 import { h, ref } from 'vue';
-import { fetchRemoteNotify, date, about, getRemoteInfos } from '../utils';
+import { fetchRemoteNotify, date, about, fetchChangelogMarkdown } from '../utils';
+import { ensureUpdaterChangelogStyle } from '../utils/ipc';
+import { marked } from 'marked';
 import { remote } from '../utils/remote';
 import TitleLink from './TitleLink.vue';
 import { Message, Modal, InputPassword } from '@arco-design/web-vue';
 import { store, devSession } from '../store/index';
+import { restartAppGuarded } from '../utils/restart';
 import { OCS_WEBSITE, OCS_DOWNLOAD_PAGE } from '@ocs-desktop/common/web';
 import { electron } from '../utils/node';
 import { currentBrowser, currentFolder, currentEntities, currentSearchedEntities } from '../fs/index';
@@ -86,21 +99,24 @@ import { Folder, root } from '../fs/folder';
 import { FolderOptions, FolderType } from '../fs/interface';
 import { Browser } from '../fs/browser';
 import { checkBrowserCaches } from '../utils/browser';
-import Icon from './Icon.vue';
 import PinButton from './PinButton.vue';
+import {
+	Trash2Icon,
+	SaveIcon,
+	UploadIcon,
+	RefreshCwIcon,
+	FolderIcon,
+	CodeIcon,
+	BookIcon,
+	NotepadTextIcon,
+	HouseIcon
+} from 'lucide-vue-next';
 
 const { shell } = electron;
 
-// 打开初始化设置弹窗（手动触发时跳过「欢迎使用」引导，直接进入初始化）
-function openSetup() {
-	store.render.state.welcome = false;
-	store.render.state.setup = true;
-}
-
-// 重启
+// 重启（dev 感知：pnpm dev 下提示手动重启终端，见 utils/restart.ts）
 function relaunch() {
-	remote.app.call('relaunch');
-	remote.app.call('quit');
+	restartAppGuarded();
 }
 
 // 打开日志目录
@@ -236,8 +252,7 @@ function importData() {
 						hideCancel: false,
 						simple: false,
 						onOk() {
-							remote.app.call('relaunch');
-							remote.methods.call('quitApp', 0);
+							restartAppGuarded('数据已导入，需重启软件后生效。');
 						}
 					});
 				} catch (err) {
@@ -331,27 +346,34 @@ function openDevTools() {
 		store
 	};
 
-	// 开启开发者设置卡片（会话级，重启后自动隐藏）
-	if (!devSession.enabled) {
-		devSession.enabled = true;
-		Message.info('已开启开发者设置，可在「设置」页查看（重启软件后自动隐藏）');
-	}
+	// 开启开发者设置子界面（会话级，重启后自动隐藏；静默开启，不弹提示）
+	devSession.enabled = true;
 
 	remote.webContents.call('openDevTools');
 }
 
 async function showVersionLogs() {
-	const infos = await getRemoteInfos();
+	// 与 electron-updater 同源：直接拉取更新源目录的 CHANGELOG.md（markdown 全文展示）
+	let changelog = '';
+	try {
+		changelog = await fetchChangelogMarkdown();
+	} catch (err) {
+		Message.error('更新日志获取失败：' + err);
+		return;
+	}
 
-	Modal.confirm({
-		title: () => '🎉 更新日志 🎉',
+	ensureUpdaterChangelogStyle();
+
+	Modal.open({
+		title: () => '🎉更新日志',
+		titleAlign: 'center',
 		okText: '确定',
 		hideCancel: true,
-		simple: true,
+		simple: false,
 		width: 600,
 		content: () =>
 			h('div', [
-				h('h', [
+				h('div', [
 					'可前往官网下载最新版本：',
 					h(
 						'a',
@@ -362,36 +384,18 @@ async function showVersionLogs() {
 						OCS_DOWNLOAD_PAGE
 					)
 				]),
-				h(
-					'div',
-					{
-						style: {
-							maxHeight: '320px',
-							overflow: 'auto'
+				h('div', {
+					class: 'update-changelog-content',
+					innerHTML: marked.parse(changelog || '暂无更新日志'),
+					// markdown 中的链接（commit/compare 链接）统一用系统浏览器打开
+					onClick: (event: MouseEvent) => {
+						const anchor = (event.target as HTMLElement).closest('a');
+						if (anchor) {
+							event.preventDefault();
+							shell.openExternal(anchor.href);
 						}
-					},
-					infos.versions.map((item) =>
-						h('div', [
-							h(
-								'div',
-								{
-									style: {
-										marginBottom: '6px',
-										fontWeight: 'bold'
-									}
-								},
-								item.tag
-							),
-							h(
-								'ul',
-								(item.description.feat || [])
-									.concat(item.description.fix || [])
-									.concat(item.description.other || [])
-									.map((text: string) => h('li', text))
-							)
-						])
-					)
-				)
+					}
+				})
 			])
 	});
 }

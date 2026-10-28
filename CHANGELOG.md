@@ -1,12 +1,112 @@
-## [2.9.33](https://github.com/ocsjs/ocs-desktop/compare/2.9.31...2.9.33) (2026-05-10)
+# Changelog
+
+## [3.6.0](https://github.com/ocsjs/ocs-desktop/compare/v3.5.0...v3.6.0) (2026-10-28)
 
 
-### Bug Fixes
+### ✨ 新功能
 
-* **web:** 使用实时easy-us库，同步最新版本 ([2d122a8](https://github.com/ocsjs/ocs-desktop/commit/2d122a8c4193f2ba8259678d622edd88e7f75976))
-* **web:** 移除初始化浏览器启动测试 ([da36a8d](https://github.com/ocsjs/ocs-desktop/commit/da36a8d3cee8f1904d207802ca2946b714998582))
+* 图标体系统一为 Lucide（lucide-vue-next），获得组件级导入与代码补全 ([d1270a7](https://github.com/ocsjs/ocs-desktop/commit/d1270a7725c0e17ecc41461ebe5f77bee0720f1e))
+* 新手引导完成步骤显示绿色打勾图标，文案改为「环境自动准备」 ([6251dcd](https://github.com/ocsjs/ocs-desktop/commit/6251dcdb44f3b43805a310189090dbb38022da52))
+* 环境系统被动化重构——启动浏览器时自动检测补全，移除主动初始化焦虑入口 ([c69a8ad](https://github.com/ocsjs/ocs-desktop/commit/c69a8adb113e3b3d97c0937a91ace81692ccfe6e))
 
 
+### 🐛 问题修复
+
+* **linux:** 纯 Wayland 环境下内置浏览器无法启动 ([b54c596](https://github.com/ocsjs/ocs-desktop/commit/b54c596c24ed7759449725632aa80edb489fb049))
+* 修正 CHANGELOG 版本段落顺序并补回 H1 标题 ([52bc8ed](https://github.com/ocsjs/ocs-desktop/commit/52bc8ed1cd2a607f956ab106bf9fb02ec8601fb5))
+* 移除无用vite构建文件，防止图标被误删除 ([3c5c22c](https://github.com/ocsjs/ocs-desktop/commit/3c5c22c7c4052cd703c64846e98c1ebe7337b90e))
+
+
+### ⚡ 性能优化
+
+* 优化新建浏览器卡片文案 ([8b0319c](https://github.com/ocsjs/ocs-desktop/commit/8b0319c90fccedcaabd6616490a18bc0e7f4aca3))
+* 更新日志弹窗切换为与 electron-updater 同源的 CHANGELOG.md，弹窗标题居中统一样式 ([da2c1b4](https://github.com/ocsjs/ocs-desktop/commit/da2c1b4b3a6f87b7fef487e5a34dbab2a47110cd))
+
+
+### 💄 样式更新
+
+* 优化设置侧边栏宽度 ([b5bc9ae](https://github.com/ocsjs/ocs-desktop/commit/b5bc9ae44848b5d83cbf4c3e90f004f42e3899aa))
+
+## [3.5.0](https://github.com/ocsjs/ocs-desktop/compare/v3.4.1...v3.5.0) (2026-10-27)
+
+
+### ✨ 新功能
+
+* **ci:** 统一安装包存储到单一更新目录，消除重复上传与双倍存储 ([0e6f0ed](https://github.com/ocsjs/ocs-desktop/commit/0e6f0ed4132811a3740b12ccf6d8cb562b7e49eb))
+* **linux:** 升级 Electron 43，无边框不透明窗口实现原生圆角与系统阴影 ([77c7237](https://github.com/ocsjs/ocs-desktop/commit/77c723753abca3ddb10aa9f82f0ef348776e044d))
+
+## [3.5.0](https://github.com/ocsjs/ocs-desktop/compare/v3.4.1...v3.5.0) (2026-10-27)
+
+
+### ✨ 新功能
+
+* **ci:** 统一安装包存储到单一更新目录，消除重复上传与双倍存储 ([0e6f0ed](https://github.com/ocsjs/ocs-desktop/commit/0e6f0ed4132811a3740b12ccf6d8cb562b7e49eb))
+* **linux:** 升级 Electron 43，无边框不透明窗口实现原生圆角与系统阴影 ([77c7237](https://github.com/ocsjs/ocs-desktop/commit/77c723753abca3ddb10aa9f82f0ef348776e044d))
+
+## [3.4.1](https://github.com/ocsjs/ocs-desktop/compare/v3.4.0...v3.4.1) (2026-10-27)
+
+
+### 🐛 问题修复
+
+* **linux:** 窗口增加外阴影与边距，修复白色背景下边缘无法分辨 ([f204fd2](https://github.com/ocsjs/ocs-desktop/commit/f204fd22095e58c6e412cb40bfe4c27089879ee8))
+
+
+### 💄 样式更新
+
+* 优化更新进度条、和更新日志显示样式 ([875ac9c](https://github.com/ocsjs/ocs-desktop/commit/875ac9c0767efcfd3ae8ec46a3520a045d9ebc7e))
+* 归一化 ipc.ts/notify.ts 格式（prettier） ([2037ac3](https://github.com/ocsjs/ocs-desktop/commit/2037ac300b3f643ce4377964d3d065f9d968e960))
+
+## [3.4.0](https://github.com/ocsjs/ocs-desktop/compare/v3.3.0...v3.4.0) (2026-10-25)
+
+
+### ✨ Features
+
+* 发布闸门嵌回 build.yml 内嵌审批，独立工作流降为补发通道 ([4f3734f](https://github.com/ocsjs/ocs-desktop/commit/4f3734f50d1ea06ed55bac3c91b294eea3d085fa))
+
+
+### 🐛 Bug Fixes
+
+* 发布闸门 gh 调用补 --repo 参数 ([a310e12](https://github.com/ocsjs/ocs-desktop/commit/a310e1200772e9bc4f75d9d4b920b0dc3b9eff06))
+
+## [3.3.0](https://github.com/ocsjs/ocs-desktop/compare/v3.2.0...v3.3.0) (2026-10-25)
+
+
+### ✨ Features
+
+* 发布闸门改为独立手动触发工作流 publish-update.yml ([c7304f1](https://github.com/ocsjs/ocs-desktop/commit/c7304f1bf76bd6e85875f4f2b145c4c28702b261))
+
+
+### 🐛 Bug Fixes
+
+* 修正 CHANGELOG 版本段落顺序 ([c9ffde9](https://github.com/ocsjs/ocs-desktop/commit/c9ffde9a672209bc2fccbce78e98a3e9cbe2c928))
+
+## [3.2.0](https://github.com/ocsjs/ocs-desktop/compare/v3.1.0...v3.2.0) (2026-10-25)
+
+
+### ✨ Features
+
+* 开发模式（pnpm dev）下软件重启改为引导手动重跑终端 ([8e65b04](https://github.com/ocsjs/ocs-desktop/commit/8e65b04d3ab234977f723ce305b7a54507613ba4))
+* 开发者设置独立子界面，新增软件辅助/下载优化/数据加密开关 ([ea444ba](https://github.com/ocsjs/ocs-desktop/commit/ea444ba59c8a6ff62b89e3332e6f797d8b475dd7))
+* 支持 AppImage 桌面入口集成与 Linux 密钥环运行时检测 ([3acfa26](https://github.com/ocsjs/ocs-desktop/commit/3acfa26feec21a667746493d44927263824b8b4c))
+* 新增 deb 打包目标并声明 Linux 密钥环依赖 ([b35c9bb](https://github.com/ocsjs/ocs-desktop/commit/b35c9bb76c98167c3f4fefe0681f68caa5c16c50))
+* 新增 OCR 识别模块三平台打包工程（CLI + CI 工作流 + Release 上传） ([f1d5060](https://github.com/ocsjs/ocs-desktop/commit/f1d506006092544acda90a5f9222e00f31fae2ff))
+* 统一下载器（分块并发 + 断点续传）并合并应用中心遮罩层 ([baac962](https://github.com/ocsjs/ocs-desktop/commit/baac962283572cbf08d8c4882d4026e2c8b418c6))
+* 自动化程序 OCR 依赖改为启动后非阻塞提示与一键安装 ([9ffc8b2](https://github.com/ocsjs/ocs-desktop/commit/9ffc8b268f556fe125eb934a89e94f53b44bfe9d))
+
+
+### 🐛 Bug Fixes
+
+* **test:** electron mock 补充 app.whenReady 适配加密初始化时序 ([dc528c2](https://github.com/ocsjs/ocs-desktop/commit/dc528c22d47fdd16d8bbc7010c9a65950273b9fc))
+* **test:** 修正软链测试夹具——adm-zip 无法构造 S_IFLNK 条目 ([8bb740e](https://github.com/ocsjs/ocs-desktop/commit/8bb740e52df00a902a70de5de7a581a0649bdf64))
+* 修复全平台主密钥被误判明文存储的严重问题 ([fb96477](https://github.com/ocsjs/ocs-desktop/commit/fb96477cd299ed34426c42823d1d98b6bf2949a6))
+* 平台专属资源下载门控，修复 Linux 误装 win32 OCR 包导致检测不到 ([57b5748](https://github.com/ocsjs/ocs-desktop/commit/57b5748d5fdcf5f78ffcb2830a37b742da6e08bc))
+* 环境检测跳过目录形态的 manifest.json，避免 EISDIR 弹错 ([561797c](https://github.com/ocsjs/ocs-desktop/commit/561797c55c7e2d1c851239649eadff7c0a47f5cf))
+* 重写统一解压管线，修复 macOS OCR 软链丢失与 Windows 初始化 rename EPERM ([c9a4919](https://github.com/ocsjs/ocs-desktop/commit/c9a4919772f207a85e28404c53394326d76771bb))
+
+
+### ♻️ Refactoring
+
+* 解压主体换用 extract-zip，移除 unzipper ([6b7a71b](https://github.com/ocsjs/ocs-desktop/commit/6b7a71be75b1653cace8d22fbf44ca01009796b2))
 
 ## [3.1.0](https://github.com/ocsjs/ocs-desktop/compare/v3.0.1...v3.1.0) (2026-10-22)
 
@@ -265,10 +365,6 @@
 * **ci:** 分离 Release PR 创建和 Release 发布流程 ([c78fc6b](https://github.com/ocsjs/ocs-desktop/commit/c78fc6b3cb93574c8c35326f0bdb6626b2b8b82b))
 * 重构项目架构 ([0db2ae6](https://github.com/ocsjs/ocs-desktop/commit/0db2ae6481f362fa6c799fa08c2767e7aa9ae7f1))
 
-## [2.9.31](https://github.com/ocsjs/ocs-desktop/compare/2.9.30...2.9.31) (2025-11-18)
-
-
-
 ## [2.10.0](https://github.com/ShyButHandsome/ocs-desktop/compare/v2.9.31...v2.10.0) (2026-03-02)
 
 
@@ -296,6 +392,20 @@
 
 * **ci:** 分离 Release PR 创建和 Release 发布流程 ([c78fc6b](https://github.com/ShyButHandsome/ocs-desktop/commit/c78fc6b3cb93574c8c35326f0bdb6626b2b8b82b))
 * 重构项目架构 ([0db2ae6](https://github.com/ShyButHandsome/ocs-desktop/commit/0db2ae6481f362fa6c799fa08c2767e7aa9ae7f1))
+
+## [2.9.33](https://github.com/ocsjs/ocs-desktop/compare/2.9.31...2.9.33) (2026-05-10)
+
+
+### Bug Fixes
+
+* **web:** 使用实时easy-us库，同步最新版本 ([2d122a8](https://github.com/ocsjs/ocs-desktop/commit/2d122a8c4193f2ba8259678d622edd88e7f75976))
+* **web:** 移除初始化浏览器启动测试 ([da36a8d](https://github.com/ocsjs/ocs-desktop/commit/da36a8d3cee8f1904d207802ca2946b714998582))
+
+
+
+## [2.9.31](https://github.com/ocsjs/ocs-desktop/compare/2.9.30...2.9.31) (2025-11-18)
+
+
 
 ## [2.9.30](https://github.com/ocsjs/ocs-desktop/compare/2.9.28...2.9.30) (2025-11-16)
 
