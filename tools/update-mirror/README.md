@@ -3,16 +3,15 @@
 GitHub Releases 在国内下载很慢。这个目录提供一套最小可用的自建更新源，
 配合 OCS 设置页的「软件更新 → 自建镜像」使用。
 
-> 3.x 起更新由 **electron-updater**（generic provider）负责：镜像根目录必须提供
-> `latest-linux.yml`（Windows 为 `latest.yml`）以及清单里引用的安装包。
+> 2026-10-29 起 Linux 只发布 **deb**（不再构建/发布 AppImage）：镜像根目录提供
+> `latest-linux.yml`（版本号 + deb 的 sha512）和对应的 deb，客户端按清单自行下载并安装。
 
 ## 目录结构
 
 ```
 /srv/ocs-dl/
 ├── latest-linux.yml
-├── ocs-2.13.25-setup-linux-x86_64.AppImage
-├── ocs-2.13.25-setup-linux-amd64.deb
+├── ocs-3.6.0-3-setup-linux-amd64.deb
 └── v2.13.25/                      # 按 tag 归档的原始产物（可选保留）
     └── ...
 ```
@@ -29,8 +28,8 @@ sudo bash sync-release-curl.sh              # 同步最新 release
 sudo bash sync-release-curl.sh v3.6.0.1     # 或指定 tag
 ```
 
-脚本会下载 `latest-linux.yml`、AppImage、deb、`CHANGELOG.md`，按清单里的 sha512 校验
-AppImage，原子替换根目录文件，并删除旧版本的安装包。版本未变且文件齐全时直接跳过，
+脚本会下载 `latest-linux.yml`、deb、`CHANGELOG.md`，按清单里的 sha512 校验 deb，
+原子替换根目录文件，并删除旧版本 deb（以及历史遗留的 AppImage）。版本未变且文件齐全时直接跳过，
 不会重复下载。当前 VPS 上安装在 `/usr/local/bin/ocs-sync-release.sh`，由
 `/etc/cron.d/ocs-update-sync` 每天 04:17 兜底执行，日志写到 `/var/log/ocs-update-sync.log`。
 
@@ -83,13 +82,13 @@ docker run -d --name ocs-update --restart unless-stopped \
 ```bash
 curl -sI http://127.0.0.1:15321/latest-linux.yml
 curl -s -o /dev/null -w '%{http_code}\n' -r 0-1023 \
-  http://127.0.0.1:15321/ocs-3.6.0-1-setup-linux-x86_64.AppImage   # 期望 206
+  http://127.0.0.1:15321/ocs-3.6.0-3-setup-linux-amd64.deb   # 期望 206
 ```
 
 容器只绑 `127.0.0.1`，外部访问必须经过宿主机反向代理（宝塔站点 → 反向代理 →
 目标 `http://127.0.0.1:15321`）。若反代挂在子路径 `/ocs/`，`proxy_pass` 末尾要带 `/`
 以去掉前缀，保证客户端请求的 `/ocs/latest-linux.yml` 落到容器的 `/latest-linux.yml`。
-nginx 静态文件原生支持 `Range`，AppImage 断点续传正常。
+nginx 静态文件原生支持 `Range`，deb 断点续传正常。
 
 ```bash
 # 更新镜像内容后无需重启容器（只读挂载目录实时生效）
@@ -124,7 +123,7 @@ nginx 的静态文件默认支持 `Range`（断点续传）。
 
 ```bash
 curl -I https://dl.example.com/ocs/latest-linux.yml
-curl -I https://dl.example.com/ocs/ocs-2.13.25-setup-linux-x86_64.AppImage
+curl -I https://dl.example.com/ocs/ocs-3.6.0-3-setup-linux-amd64.deb
 ```
 
 ## 客户端
@@ -137,11 +136,11 @@ curl -I https://dl.example.com/ocs/ocs-2.13.25-setup-linux-x86_64.AppImage
 
 行为说明：
 
-- 镜像不可用或缺少清单时，electron-updater 会记录错误并视为「暂无更新」；
+- 镜像不可用或缺少清单时，客户端记录错误并视为「暂无更新」；
   需要恢复官方源时，把更新源切回「GitHub 官方」即可。
-- **AppImage** 支持应用内自动更新（下载后替换并重启）。
-- **deb** 安装的用户建议继续用 `apt` 或手动下载安装包；electron-updater 在 Linux 上
-  只对 AppImage 做应用内更新。
+- **deb** 是 Linux 唯一发布形式：客户端按 `latest-linux.yml` 的版本号判断更新，
+  分片下载 deb 并校验 sha512，下载完成后通过 `pkexec`（系统密码框）自动安装；
+  没有 polkit 授权环境时回退为手动命令。
 
 ## 安全
 

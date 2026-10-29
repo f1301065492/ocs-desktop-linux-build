@@ -4,7 +4,6 @@
 #
 # 目录约定（平铺，electron-updater 按文件名相对 feed 根目录解析）：
 #   /srv/ocs-dl/latest-linux.yml
-#   /srv/ocs-dl/ocs-<version>-setup-linux-x86_64.AppImage
 #   /srv/ocs-dl/ocs-<version>-setup-linux-amd64.deb
 #   /srv/ocs-dl/<tag>/...                # 保留一份按 tag 归档的原始文件
 #
@@ -36,10 +35,9 @@ info "文件：$(ls -1 "$DIR/$TAG" | tr '\n' ' ')"
 
 step '2. 同步到 feed 根目录'
 # 清单里的 url 是文件名（不含 tag 目录），所以安装包必须与 yml 同目录
-cp -f "$DIR/$TAG"/*.AppImage "$DIR/" 2>/dev/null || true
 cp -f "$DIR/$TAG"/*.deb "$DIR/" 2>/dev/null || true
 cp -f "$DIR/$TAG"/latest-linux.yml "$DIR/latest-linux.yml"
-info "已同步：$(ls -1 "$DIR"/latest-linux.yml "$DIR"/*.AppImage "$DIR"/*.deb 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
+info "已同步：$(ls -1 "$DIR"/latest-linux.yml "$DIR"/*.deb 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
 
 step '3. 权限'
 chown -R "$OWNER":"$OWNER" "$DIR" 2>/dev/null || true

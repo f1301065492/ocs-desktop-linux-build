@@ -79,9 +79,6 @@
 		"artifactName": "ocs-${version}-setup-${os}-${arch}.${ext}",
 		"target": [
 			{
-				"target": "AppImage"
-			},
-			{
 				"target": "deb"
 			}
 		],

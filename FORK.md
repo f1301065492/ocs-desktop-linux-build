@@ -110,7 +110,7 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
   `--ozone-platform-hint=auto`；否则复用已有 Xvfb → 为当前 worker 启动独立 Xvfb → 都没有则退回 headless。
   使用 X11 时会清掉 `WAYLAND_DISPLAY`/`XDG_SESSION_TYPE`，并给 Chromium 加
   `--ozone-platform=x11`（避免明明有 Xvfb 却去连 Wayland）。
-  deb 的 `depends` 已包含 `xvfb`；AppImage/手动部署需 `sudo apt install -y xvfb`。
+  deb 的 `depends` 已包含 `xvfb`；手动解压部署需 `sudo apt install -y xvfb`。
 - **worker 环境**：渲染进程 fork worker 时通过 IPC `getRuntimeEnv` 合并主进程的
   `DISPLAY` / `XAUTHORITY` / `PATH` 等变量，避免 Electron 渲染进程 env 不完整导致
   `xvfb-run` 启动的 OCS 仍然拿不到 DISPLAY。
@@ -119,11 +119,13 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
   > ⚠️ worker 侧**不要 import `../logger`**：`logger.ts` 会 `require('electron')`，
   > worker 是纯 Node 子进程，一打包就报 `Cannot find module 'electron'`。用 `console` 输出。
 - `.github/workflows/release.yml`：只递增第四位（四段版本号的扩展序号）。
-- **更新检测**：AppImage / Windows / macOS 走 electron-updater；**Linux deb** 走
-  `ext/update/deb.ts`（electron-updater 在 Linux 只支持 AppImage），按 `latest-linux.yml`
-  检查版本、下载 deb 并给出 `apt install` 命令。检查不再被 3s 上游 CDN 探测直接跳过，
+- **更新检测（2026-10-29 起 Linux 只发 deb）**：**Linux** 走 `ext/update/deb.ts`，
+  按 `latest-linux.yml` 检查版本、分片下载 deb（8 路并发 + 断点续传 + sha512 校验），
+  下载完成后依次尝试 `pkexec`（系统密码框）/ `sudo -n`（NOPASSWD）自动安装，失败才回退
+  手动命令；Windows / macOS 仍走 electron-updater。检查不再被 3s 上游 CDN 探测直接跳过，
   只用 15s 总超时兜底；国内网络可用设置页的「自建镜像」。
-- `.github/workflows/build-linux-appimage.yml`、`packages/app/electron.builder.json`：Linux 打包、deb 依赖、图标、`tools/` 随包发布。
+- `.github/workflows/build-linux-deb.yml`、`packages/app/electron.builder.json`：Linux **只构建 deb**
+  （不再构建/发布 AppImage），含 deb 依赖、图标、`tools/` 随包发布。
 - `packages/app/build/icons/`：多尺寸图标集。
 - `.gitignore`：忽略三份只留本地的文件。
 
@@ -139,8 +141,10 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 - 内部 `package.json`：**`x.y.z-n`**。四段数字不是合法 semver，electron-updater 会抛
   `ERR_UPDATER_INVALID_VERSION`，所以第四位用预发布位表示；界面与 `/health` 展示时把 `-n` 转成 `.n`。
 - `release.yml` 只递增第四位；`upstream-sync` 合并成功后把前三段更新为上游版本，核心变化时第四位归零。
-- 发布 Linux 包时必须同时上传 `latest-linux.yml`（工作流会在 electron-builder 未生成时按 AppImage 现算）；
+- 发布 Linux 包时必须同时上传 `latest-linux.yml`（工作流按 deb 现算 version/sha512/size）；
   同时上传仓库根的 `CHANGELOG.md`，更新弹窗按 `${更新源}/CHANGELOG.md` 拉取版本日志。
+- **Linux 只发布 deb（2026-10-29 定）**：`build-linux-deb.yml` 与 `electron.builder.json`
+  仅保留 deb 目标，Release 不再上传 AppImage；客户端只走 deb 更新链路。
 - **发版后必须给出卸载原版/旧版的命令**（2026-10-28 定，发版流程的一部分）：
   Linux deb `sudo apt remove --purge ocs-desktop`；AppImage/手动安装删除 AppImage、桌面项与 `/opt/OCS Desktop`；
   Windows 用「设置 → 应用」或 `Uninstall OCS Desktop.exe`。并说明 `~/.config/OCS Desktop`

@@ -78,7 +78,7 @@ jobs:
     # - ref：prepare 刚推了新提交，可复用 workflow 默认会 checkout 调用方的旧 commit，
     #   不传就会构建出错误版本号的产物
     # - release-tag：让它直接把产物传到 Release，绕开有配额的 Actions artifacts
-    uses: ./.github/workflows/build-linux-appimage.yml
+    uses: ./.github/workflows/build-linux-deb.yml
     with:
       ref: ${{ needs.prepare.outputs.tag }}
       release-tag: ${{ needs.prepare.outputs.tag }}

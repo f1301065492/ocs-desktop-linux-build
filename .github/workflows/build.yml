@@ -96,7 +96,6 @@ jobs:
             releases/*.exe
             releases/*.blockmap
             releases/*.dmg
-            releases/*.AppImage
             releases/*.deb
             releases/*.rpm
             releases/latest*.yml
@@ -165,7 +164,7 @@ jobs:
           ### macOS
           - [M系列芯片(ARM64)](${DL}ocs-${VER}-setup-mac-arm64.dmg) | [Intel芯片(x64)](${DL}ocs-${VER}-setup-mac-x64.dmg)
           ### Linux
-          - [AppImage](${DL}ocs-${VER}-setup-linux-x64.AppImage) | [Debian/Ubuntu (deb)](${DL}ocs-${VER}-setup-linux-x64.deb)
+          - [Debian/Ubuntu (deb)](${DL}ocs-${VER}-setup-linux-x64.deb)
           ### 🔗 快捷访问
           - [官网](https://docs.ocsjs.com/)
           - [官网软件下载（更快）](https://docs.ocsjs.com/docs/app)
@@ -224,7 +223,7 @@ jobs:
         run: |
           set -e
           shopt -s nullglob
-          for file in artifacts/*.exe artifacts/*.dmg artifacts/*.AppImage artifacts/*.deb artifacts/*.rpm artifacts/*.blockmap; do
+          for file in artifacts/*.exe artifacts/*.dmg artifacts/*.deb artifacts/*.rpm artifacts/*.blockmap; do
             [ -f "$file" ] || continue
             for attempt in 1 2 3 4 5; do
               echo "Uploading $file (attempt $attempt/5)"

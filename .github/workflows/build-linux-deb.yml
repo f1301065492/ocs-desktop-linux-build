@@ -1,7 +1,7 @@
-name: Build Linux AppImage
+name: Build Linux deb
 
-# 独立于 build.yml：只构建 Linux x64 的 AppImage + deb。
-# build.yml 的 matrix 会同时构建 win/mac/mac-arm64/linux 四个平台，耗时且没有必要。
+# 独立于 build.yml：只构建 Linux x64 的 deb。
+# 2026-10-29 用户规则：Linux 只发 deb，不再构建/发布 AppImage。
 #
 # 两种触发方式：
 # - workflow_dispatch：手动出包，不涉及版本号
@@ -43,7 +43,7 @@ permissions:
   contents: write
 
 jobs:
-  build-linux-appimage:
+  build-linux-deb:
     runs-on: ubuntu-latest
 
     steps:
@@ -93,8 +93,8 @@ jobs:
           PLATFORM: linux
           ARCH: x64
 
-      # electron-builder 在 --publish never 下不一定产出 latest-linux.yml；
-      # electron-updater 靠它检查更新，缺失时按 AppImage 现算一份。
+      # electron-builder 在仅 deb 目标 / --publish never 时不会产出 latest-linux.yml；
+      # 客户端 deb 更新靠它读取 version（并校验 sha512），始终按 deb 现算一份。
       - name: Generate update metadata
         run: |
           node - <<'NODE'
@@ -103,28 +103,23 @@ jobs:
           const crypto = require('crypto');
           const dir = 'releases';
           const appPkg = JSON.parse(fs.readFileSync('packages/app/package.json', 'utf8'));
-          const ymlPath = path.join(dir, 'latest-linux.yml');
-          if (fs.existsSync(ymlPath)) {
-            console.log('latest-linux.yml 已由 electron-builder 生成，跳过');
-            process.exit(0);
-          }
-          const appImage = fs.readdirSync(dir).find((f) => f.endsWith('.AppImage'));
-          if (!appImage) throw new Error('releases/ 下没有 AppImage');
-          const buffer = fs.readFileSync(path.join(dir, appImage));
+          const deb = fs.readdirSync(dir).find((f) => f.endsWith('.deb'));
+          if (!deb) throw new Error('releases/ 下没有 deb');
+          const buffer = fs.readFileSync(path.join(dir, deb));
           const sha512 = crypto.createHash('sha512').update(buffer).digest('base64');
           const content = [
             `version: ${appPkg.version}`,
             'files:',
-            `  - url: ${appImage}`,
+            `  - url: ${deb}`,
             `    sha512: ${sha512}`,
             `    size: ${buffer.length}`,
-            `path: ${appImage}`,
+            `path: ${deb}`,
             `sha512: ${sha512}`,
             `releaseDate: '${new Date().toISOString()}'`,
             ''
           ].join('\n');
-          fs.writeFileSync(ymlPath, content);
-          console.log('已生成', ymlPath);
+          fs.writeFileSync(path.join(dir, 'latest-linux.yml'), content);
+          console.log('已生成 latest-linux.yml（', deb, '）');
           NODE
 
       # 发布流程：直接传到 Release。不经过 Actions artifact——
@@ -137,15 +132,14 @@ jobs:
         run: |
           set -e
           TAG="${{ inputs.release-tag }}"
-          ls -lh releases/*.AppImage releases/*.deb
+          ls -lh releases/*.deb
 
           # tag 由发布流程的上游 job 创建；这里只补 Release，已存在时不报错
           gh release create "$TAG" --title "$TAG" --generate-notes || true
 
-          # 必须一起上传 latest-linux.yml：electron-updater 靠它检查/下载更新
+          # 必须一起上传 latest-linux.yml：客户端靠它检查更新
           # CHANGELOG.md：3.6 起更新弹窗按 `${更新源}/CHANGELOG.md` 拉取版本日志
           gh release upload "$TAG" \
-            releases/*.AppImage \
             releases/*.deb \
             releases/latest-linux.yml \
             CHANGELOG.md \
@@ -158,9 +152,8 @@ jobs:
         if: inputs.release-tag == ''
         uses: actions/upload-artifact@v4
         with:
-          name: ocs-${{ env.VERSION }}-linux-x64
+          name: ocs-${{ env.VERSION }}-linux-x64-deb
           path: |
-            releases/*.AppImage
             releases/*.deb
             releases/latest-linux.yml
             CHANGELOG.md
