@@ -4,7 +4,7 @@ import AdmZip from 'adm-zip';
 import fs, { existsSync, mkdirSync } from 'fs';
 import extractZip from 'extract-zip';
 import { Logger } from '../logger';
-import { downloadFile as smartDownloadFile } from './download';
+import { downloadFile as smartDownloadFile, type DownloadFileOptions } from './download';
 import xlsx from 'xlsx';
 
 const taskLogger = Logger('task');
@@ -20,8 +20,13 @@ export async function task(name: string, func: any) {
 /**
  * 下载文件（统一下载器：分块并发 + 断点续传，实现见 utils/download.ts）
  */
-export async function downloadFile(fileURL: string, outputURL: string, rateHandler: any) {
-	return smartDownloadFile(fileURL, outputURL, { onProgress: rateHandler });
+export async function downloadFile(
+	fileURL: string,
+	outputURL: string,
+	rateHandler: any,
+	options?: Omit<DownloadFileOptions, 'onProgress'>
+) {
+	return smartDownloadFile(fileURL, outputURL, { ...options, onProgress: rateHandler });
 }
 
 /**

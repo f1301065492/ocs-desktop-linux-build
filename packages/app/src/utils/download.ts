@@ -1,5 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
+import http from 'http';
+import https from 'https';
 import path from 'path';
 import { Logger } from '../logger';
 
@@ -27,6 +29,8 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
 
 /** 默认分块并发数 */
 const DEFAULT_CONCURRENCY = 6;
+/** 并发上限：防止环境变量或调用方误配把 CDN/源站打挂 */
+const MAX_CONCURRENCY = 16;
 /** 最小分块大小：小于该尺寸的文件不拆分（并发收益抵不过连接开销） */
 const MIN_CHUNK_SIZE = 4 * 1024 * 1024;
 /** 单块失败重试次数（重试时从块内已写字节处续传） */
@@ -70,8 +74,32 @@ export interface DownloadFileOptions {
  *    跳过已完成分块，仅补缺失分块。
  * 4. 全部完成：清理旁车元数据。
  */
+/**
+ * 解析并发数：显式参数 > 环境变量 `OCS_DOWNLOAD_CONCURRENCY` > 默认 6。
+ * 跨境链路单连接带宽有限时，多连接往往能叠加吞吐；现场可先用环境变量试 8/12。
+ */
+function resolveConcurrency(value: unknown): number {
+	const n = Number(value);
+	if (!Number.isFinite(n) || n <= 0) return DEFAULT_CONCURRENCY;
+	return Math.min(MAX_CONCURRENCY, Math.max(1, Math.floor(n)));
+}
+
+/**
+ * 分块请求被服务器忽略 Range（返回 200 全量）——需要回退单流下载。
+ * 用标记字段判断而不是 instanceof：tsc 若把 class 降级到 ES5，继承 Error 后
+ * instanceof 会失效（已知的 built-in 继承问题）。
+ */
+class RangeUnsupportedError extends Error {
+	readonly rangeUnsupported = true;
+}
+
+function isRangeUnsupported(e: unknown): boolean {
+	return !!e && (e as { rangeUnsupported?: boolean }).rangeUnsupported === true;
+}
+
 export async function downloadFile(fileURL: string, outputURL: string, options: DownloadFileOptions = {}) {
-	const { concurrency = DEFAULT_CONCURRENCY, retries = CHUNK_RETRIES, onProgress } = options;
+	const concurrency = resolveConcurrency(options.concurrency ?? process.env.OCS_DOWNLOAD_CONCURRENCY);
+	const { retries = CHUNK_RETRIES, onProgress } = options;
 	logger.info('downloadFile', fileURL, outputURL);
 	fs.mkdirSync(path.dirname(outputURL), { recursive: true });
 
@@ -85,6 +113,15 @@ export async function downloadFile(fileURL: string, outputURL: string, options: 
 
 	const chunkSize = options.chunkSize || Math.max(MIN_CHUNK_SIZE, Math.ceil(probe.size / (concurrency * 4)));
 	const chunkCount = Math.ceil(probe.size / chunkSize);
+
+	// 分块共用 keep-alive 连接池：跨境链路上每次 TLS 握手要几百毫秒，24 块不复用会白等十几秒
+	const agentOptions = { keepAlive: true, maxSockets: concurrency, maxFreeSockets: concurrency };
+	const httpAgent = new http.Agent(agentOptions);
+	const httpsAgent = new https.Agent(agentOptions);
+	const destroyAgents = () => {
+		httpAgent.destroy();
+		httpsAgent.destroy();
+	};
 	const metaPath = metaPathOf(outputURL);
 
 	// ── 断点续传：校验旁车元数据与目标文件尺寸 ──
@@ -150,10 +187,16 @@ export async function downloadFile(fileURL: string, outputURL: string, options: 
 				const res = await axios.get(fileURL, {
 					headers: { Range: `bytes=${offset}-${end}` },
 					responseType: 'stream',
-					// 非 206 视为失败（含 200 全量响应：服务器不支持 Range，交给上层回退）
-					validateStatus: (s) => s === 206,
+					httpAgent,
+					httpsAgent,
+					// 200 表示中间层吞掉了 Range：抛专用错误，由上层回退单流
+					validateStatus: (s) => s === 206 || s === 200,
 					timeout: IDLE_TIMEOUT
 				});
+				if (res.status === 200) {
+					res.data.destroy();
+					throw new RangeUnsupportedError('服务器未按 Range 返回 206');
+				}
 				// 空闲看门狗：axios timeout 只管响应头，body 停滞需要自行判定
 				let lastDataAt = Date.now();
 				const watchdog = setInterval(() => {
@@ -177,6 +220,7 @@ export async function downloadFile(fileURL: string, outputURL: string, options: 
 				}
 				return;
 			} catch (e) {
+				if (isRangeUnsupported(e)) throw e;
 				if (attempt >= retries) {
 					throw new Error(`分块 ${index}/${chunkCount} 下载失败：${formatError(e)}`);
 				}
@@ -202,10 +246,29 @@ export async function downloadFile(fileURL: string, outputURL: string, options: 
 		}
 	};
 
+	let handleClosed = false;
+	const closeHandle = () => {
+		if (!handleClosed) {
+			fs.closeSync(handle);
+			handleClosed = true;
+		}
+	};
 	try {
 		await Promise.all(Array.from({ length: Math.min(concurrency, chunkCount) }, () => worker()));
+	} catch (e) {
+		closeHandle();
+		fs.rmSync(metaPath, { force: true });
+		destroyAgents();
+		if (isRangeUnsupported(e)) {
+			logger.warn('分块请求未返回 206，回退单流下载', { url: fileURL });
+			fs.rmSync(outputURL, { force: true });
+			await simpleDownload(fileURL, outputURL, probe.size, onProgress);
+			return outputURL;
+		}
+		throw e;
 	} finally {
-		fs.closeSync(handle);
+		closeHandle();
+		destroyAgents();
 	}
 	fs.rmSync(metaPath, { force: true });
 	report(true);

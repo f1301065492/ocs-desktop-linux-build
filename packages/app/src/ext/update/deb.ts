@@ -132,9 +132,15 @@ export async function updateDebPackage(info?: UpdateInformationResource): Promis
 
 	try {
 		logger.info('开始下载 deb', { url, dest });
-		await downloadFile(url, dest, (rate: number, totalLength: number, chunkLength: number) => {
-			getCurrentWebContents().send('update-download', rate, totalLength, chunkLength);
-		});
+		// deb 包较大（270MB+），用 8 路分片并发；跨境链路上比单流稳定得多
+		await downloadFile(
+			url,
+			dest,
+			(rate: number, totalLength: number, chunkLength: number) => {
+				getCurrentWebContents().send('update-download', rate, totalLength, chunkLength);
+			},
+			{ concurrency: 8 }
+		);
 	} catch (err) {
 		logger.error('deb 下载失败', err);
 		await dialog

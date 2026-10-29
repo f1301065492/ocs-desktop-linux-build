@@ -30,7 +30,9 @@ const SOURCE = makeSource(10 * 1024 * 1024 + 12345); // 10MB+ 不规则尺寸
 const serverBehavior = {
 	range: true,
 	/** 每连接最多发送字节数，超出后断开（模拟网络中断） */
-	maxBytesPerConn: undefined as number | undefined
+	maxBytesPerConn: undefined as number | undefined,
+	/** 只对探测请求（bytes=0-0）返回 206，其余 Range 返回 200（模拟中间层吞掉 Range） */
+	rangeOnlyProbe: false
 };
 /** 收到的 Range 请求起始偏移列表 */
 let rangeStarts: number[] = [];
@@ -44,9 +46,13 @@ beforeAll(async () => {
 		const range = serverBehavior.range && req.headers.range ? /bytes=(\d+)-(\d*)/.exec(req.headers.range) : null;
 		let start = 0;
 		let end = SOURCE.length - 1;
+		let useRange = false;
 		if (range) {
 			start = Number(range[1]);
 			if (range[2]) end = Math.min(Number(range[2]), end);
+			useRange = !serverBehavior.rangeOnlyProbe || (start === 0 && end === 0);
+		}
+		if (useRange) {
 			rangeStarts.push(start);
 			res.writeHead(206, {
 				'content-range': `bytes ${start}-${end}/${SOURCE.length}`,
@@ -54,6 +60,8 @@ beforeAll(async () => {
 				etag: '"v1"'
 			});
 		} else {
+			start = 0;
+			end = SOURCE.length - 1;
 			res.writeHead(200, { 'content-length': SOURCE.length, etag: '"v1"' });
 		}
 		let body = SOURCE.subarray(start, end + 1);
@@ -129,6 +137,13 @@ describe('统一下载器', () => {
 		expect(fetchedStarts.every((s) => s >= doneCount * chunkSize)).toBe(true);
 		// 覆盖了最后一个块
 		expect(fetchedStarts).toContain((chunkCount - 1) * chunkSize);
+	});
+
+	it('分块请求被中间层忽略 Range（返回 200）时回退单流下载', async () => {
+		serverBehavior.rangeOnlyProbe = true;
+		const dest = path.join(workDir, 'out.bin');
+		await downloadFile(baseUrl + '/file', dest, { chunkSize: 1024 * 1024 });
+		expect(fs.readFileSync(dest).equals(SOURCE)).toBe(true);
 	});
 
 	it('服务器不支持 Range 时回退单流下载', async () => {
