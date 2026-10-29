@@ -25,6 +25,7 @@ import {
 	scanHostKey,
 	updateSshTunnelConfig
 } from './ssh/tunnel';
+import { isDebUpdateDownloadPaused, pauseDebUpdateDownload, resumeDebUpdateDownload } from './update/deb';
 
 /**
  * 扩展功能通过 IPC 暴露给渲染进程的方法集合。
@@ -156,6 +157,11 @@ function sanitizeRemoteApiPatch(patch: any): Record<string, unknown> {
 
 /** 需远程共享的扩展方法（展开进 remote.register 的 methods） */
 export const EXT_METHODS = {
+	/** deb 更新下载：暂停 / 继续 / 状态（更新弹窗按钮用） */
+	pauseUpdateDownload: () => pauseDebUpdateDownload(),
+	resumeUpdateDownload: () => resumeDebUpdateDownload(),
+	isUpdateDownloadPaused: () => isDebUpdateDownloadPaused(),
+
 	/** 更新源配置：github / mirror */
 	updateSourceGet: () => getUpdateSourceConfig(),
 	updateSourceSet: (input: { source?: 'github' | 'mirror'; mirrorBase?: string }) => setUpdateSourceConfig(input),

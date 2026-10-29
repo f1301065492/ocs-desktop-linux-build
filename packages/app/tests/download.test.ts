@@ -105,6 +105,18 @@ describe('统一下载器', () => {
 		expect(rangeStarts.length).toBeGreaterThan(3);
 	});
 
+	it('暂停时不再领取新分块，继续后完成下载', async () => {
+		const dest = path.join(workDir, 'out.bin');
+		const control = { paused: true };
+		const pending = downloadFile(baseUrl + '/file', dest, { chunkSize: 1024 * 1024, concurrency: 2, control });
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		// 只有 Range 探测请求（bytes=0-0），没有领取任何分块
+		expect(rangeStarts).toHaveLength(1);
+		control.paused = false;
+		await pending;
+		expect(fs.readFileSync(dest).equals(SOURCE)).toBe(true);
+	});
+
 	it('连接中断时块内续传重试，最终完整下载', async () => {
 		serverBehavior.maxBytesPerConn = 512 * 1024; // 每连接最多传 512KB 后断开
 		const dest = path.join(workDir, 'out.bin');

@@ -13,6 +13,28 @@ import { displayVersion } from '../version';
 
 const logger = Logger('updater-deb');
 
+/** 当前 deb 下载的暂停控制器（null 表示没有进行中的下载） */
+let activeDownloadControl: { paused: boolean } | null = null;
+
+/** 暂停 deb 更新下载（正在传输的分块会先完成） */
+export function pauseDebUpdateDownload(): boolean {
+	if (!activeDownloadControl) return false;
+	activeDownloadControl.paused = true;
+	return true;
+}
+
+/** 继续 deb 更新下载 */
+export function resumeDebUpdateDownload(): boolean {
+	if (!activeDownloadControl) return false;
+	activeDownloadControl.paused = false;
+	return true;
+}
+
+/** 当前是否处于暂停状态 */
+export function isDebUpdateDownloadPaused(): boolean {
+	return !!activeDownloadControl?.paused;
+}
+
 /**
  * deb / 非 AppImage 的 Linux 更新。
  *
@@ -207,6 +229,8 @@ export async function updateDebPackage(info?: UpdateInformationResource): Promis
 	const fileName = path.basename(url.split('?')[0]) || 'ocs-update.deb';
 	const dest = path.join(store.store.paths.downloadFolder, fileName);
 
+	const control = { paused: false };
+	activeDownloadControl = control;
 	try {
 		logger.info('开始下载 deb', { url, dest });
 		// deb 包较大（270MB+），用 8 路分片并发；跨境链路上比单流稳定得多
@@ -216,7 +240,7 @@ export async function updateDebPackage(info?: UpdateInformationResource): Promis
 			(rate: number, totalLength: number, chunkLength: number) => {
 				getCurrentWebContents().send('update-download', rate, totalLength, chunkLength);
 			},
-			{ concurrency: 8 }
+			{ concurrency: 8, control }
 		);
 	} catch (err) {
 		logger.error('deb 下载失败', err);
@@ -234,6 +258,8 @@ export async function updateDebPackage(info?: UpdateInformationResource): Promis
 				if (response === 0) clipboard.writeText(url as string);
 			});
 		return;
+	} finally {
+		activeDownloadControl = null;
 	}
 
 	if (await autoInstallDeb(dest)) {

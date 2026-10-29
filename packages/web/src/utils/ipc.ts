@@ -2,7 +2,7 @@ import { UpdateInformationResource } from '@ocs-desktop/common';
 import { store } from '../store';
 import { electron } from '../utils/node';
 import { notify } from './notify';
-import { Modal, Progress } from '@arco-design/web-vue';
+import { Button, Modal, Progress } from '@arco-design/web-vue';
 import { h } from 'vue';
 import { marked } from 'marked';
 import { remote } from './remote';
@@ -27,30 +27,55 @@ export function ensureUpdaterChangelogStyle() {
 }
 
 export function activeIpcRenderListener() {
-	/** 如果正在更新的话，获取更新进度 */
+	/** 如果正在更新的话，获取更新进度（带暂停/继续按钮） */
+	let updatePaused = false;
+	let updateLoaded = 0;
+	let updateTotal = 0;
+	const renderUpdateProgress = () => {
+		const percent = updateTotal > 0 ? updateLoaded / updateTotal : 0;
+		const sizeText = `${(updateLoaded / 1024 / 1024).toFixed(2)}MB/${(updateTotal / 1024 / 1024).toFixed(2)}MB`;
+		notify('OCS更新程序', `更新中: ${sizeText}`, 'updater', {
+			type: 'info',
+			duration: 0,
+			close: false,
+			content: () =>
+				h('div', [
+					h('div', `${updatePaused ? '已暂停' : '更新中'}: ${sizeText}`),
+					h(Progress, {
+						percent,
+						size: 'small',
+						showText: false,
+						style: 'margin-top: 6px;'
+					})
+				]),
+			btn:
+				process.platform === 'linux'
+					? h('div', { style: 'display:flex; justify-content:flex-end; gap:8px;' }, [
+							h(
+								Button,
+								{
+									size: 'mini',
+									onClick: async () => {
+										const next = !updatePaused;
+										const ok = await remote.methods
+											.call(next ? 'pauseUpdateDownload' : 'resumeUpdateDownload')
+											.catch(() => false);
+										if (ok) {
+											updatePaused = next;
+											renderUpdateProgress();
+										}
+									}
+								},
+								() => (updatePaused ? '继续下载' : '暂停下载')
+							)
+					  ])
+					: undefined
+		});
+	};
 	ipcRenderer.on('update-download', (e, rate, totalLength, chunkLength) => {
-		const percent = totalLength > 0 ? chunkLength / totalLength : 0;
-		notify(
-			'OCS更新程序',
-			`更新中: ${(chunkLength / 1024 / 1024).toFixed(2)}MB/${(totalLength / 1024 / 1024).toFixed(2)}MB`,
-			'updater',
-			{
-				type: 'info',
-				duration: 0,
-				close: false,
-				// 进度文本下方展示进度条
-				content: () =>
-					h('div', [
-						h('div', `更新中: ${(chunkLength / 1024 / 1024).toFixed(2)}MB/${(totalLength / 1024 / 1024).toFixed(2)}MB`),
-						h(Progress, {
-							percent,
-							size: 'small',
-							showText: false,
-							style: 'margin-top: 6px;'
-						})
-					])
-			}
-		);
+		updateTotal = totalLength;
+		updateLoaded = chunkLength;
+		renderUpdateProgress();
 	});
 
 	// 显示浏览器
@@ -64,6 +89,9 @@ export function activeIpcRenderListener() {
 		if (!new_version) {
 			return;
 		}
+		updatePaused = false;
+		updateLoaded = 0;
+		updateTotal = 0;
 		ensureUpdaterChangelogStyle();
 
 		Modal.confirm({

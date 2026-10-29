@@ -60,6 +60,11 @@ export interface DownloadFileOptions {
 	retries?: number;
 	/** 进度回调：rate 0-100、总字节、已下载字节 */
 	onProgress?: (rate: number, totalLength: number, loadedLength: number) => void;
+	/**
+	 * 暂停控制：worker 在领取新分块前检查 `paused`。
+	 * 已经在传输的分块会先完成（最多 并发数 × 分块大小），避免半截连接影响续传元数据。
+	 */
+	control?: { paused: boolean };
 }
 
 /**
@@ -111,7 +116,10 @@ export async function downloadFile(fileURL: string, outputURL: string, options: 
 		return outputURL;
 	}
 
-	const chunkSize = options.chunkSize || Math.max(MIN_CHUNK_SIZE, Math.ceil(probe.size / (concurrency * 4)));
+	// 分块粒度 1–4MB、目标 16 波：块太大时最后一块会独占一条慢连接，
+	// 表现就是「最后一点特别慢」；块更小则尾部等待更短。
+	const chunkSize =
+		options.chunkSize || Math.max(1024 * 1024, Math.min(4 * 1024 * 1024, Math.ceil(probe.size / (concurrency * 16))));
 	const chunkCount = Math.ceil(probe.size / chunkSize);
 
 	// 分块共用 keep-alive 连接池：跨境链路上每次 TLS 握手要几百毫秒，24 块不复用会白等十几秒
@@ -233,9 +241,16 @@ export async function downloadFile(fileURL: string, outputURL: string, options: 
 	};
 
 	// worker 池：固定并发数，轮流领取未完成的分块
+	const control = options.control;
+	const waitIfPaused = async () => {
+		while (control?.paused) {
+			await sleep(200);
+		}
+	};
 	let nextIndex = 0;
 	const worker = async () => {
 		while (true) {
+			await waitIfPaused();
 			const index = nextIndex++;
 			if (index >= chunkCount) return;
 			if (done.has(index)) continue;
