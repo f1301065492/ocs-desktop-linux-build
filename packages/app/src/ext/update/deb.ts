@@ -1,5 +1,7 @@
-import { clipboard, dialog, shell } from 'electron';
+import { app, clipboard, dialog, shell } from 'electron';
 import axios from 'axios';
+import { spawn } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import { gt } from 'semver';
 import type { UpdateInformationResource } from '@ocs-desktop/common';
@@ -108,8 +110,83 @@ export async function checkDebUpdate(currentVersion: string): Promise<{
 	return { current: versionText(currentVersion), latest: versionText(latest), hasUpdate: true };
 }
 
+/** apt-get 的绝对路径（pkexec/sudo 下 PATH 可能不完整） */
+const APT_GET = '/usr/bin/apt-get';
+
+interface InstallAttempt {
+	ok: boolean;
+	code: number | null;
+	output: string;
+}
+
+/** 运行一条安装命令，收集输出用于判断失败原因 */
+function runInstallCommand(command: string, args: string[]): Promise<InstallAttempt> {
+	return new Promise((resolve) => {
+		const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+		let output = '';
+		const collect = (chunk: Buffer) => {
+			output = (output + chunk.toString()).slice(-8000);
+		};
+		child.stdout?.on('data', collect);
+		child.stderr?.on('data', collect);
+		child.once('error', (e) => resolve({ ok: false, code: null, output: String(e) }));
+		child.once('close', (code) => resolve({ ok: code === 0, code, output }));
+	});
+}
+
 /**
- * 下载 deb 并提示安装。deb 装在 /opt 需要 root，软件内不代执行 sudo。
+ * 自动安装候选命令，按优先级：
+ *   1. pkexec + apt-get：桌面会话弹系统密码框（polkit 授权）；
+ *   2. sudo -n + apt-get：服务器配置了 NOPASSWD 时无需交互即可安装。
+ * 都不行则由调用方回退到「复制手动命令」。
+ */
+function installCandidates(debPath: string): Array<{ label: string; command: string; args: string[] }> {
+	const list: Array<{ label: string; command: string; args: string[] }> = [];
+	if (fs.existsSync('/usr/bin/pkexec')) {
+		list.push({
+			label: 'pkexec',
+			command: '/usr/bin/pkexec',
+			args: ['/usr/bin/env', 'DEBIAN_FRONTEND=noninteractive', APT_GET, 'install', '-y', debPath]
+		});
+	}
+	if (fs.existsSync('/usr/bin/sudo')) {
+		list.push({ label: 'sudo -n', command: '/usr/bin/sudo', args: ['-n', APT_GET, 'install', '-y', debPath] });
+	}
+	return list;
+}
+
+/** 自动安装 deb；成功时提示重启并返回 true，表示已处理完毕 */
+async function autoInstallDeb(debPath: string): Promise<boolean> {
+	if (!fs.existsSync(APT_GET)) {
+		logger.info('缺少 apt-get，跳过自动安装');
+		return false;
+	}
+	for (const candidate of installCandidates(debPath)) {
+		logger.info(`尝试 ${candidate.label} 自动安装 deb`, { debPath });
+		const result = await runInstallCommand(candidate.command, candidate.args);
+		if (result.ok) {
+			const { response } = await dialog.showMessageBox({
+				title: 'OCS更新程序',
+				message: '更新完成，需要重启软件以使用新版本。',
+				type: 'info',
+				noLink: true,
+				buttons: ['立即重启', '稍后'],
+				defaultId: 0,
+				cancelId: 1
+			});
+			if (response === 0) {
+				app.relaunch();
+				app.exit(0);
+			}
+			return true;
+		}
+		logger.warn(`${candidate.label} 安装未完成`, { code: result.code, output: result.output.slice(-300) });
+	}
+	return false;
+}
+
+/**
+ * 下载 deb 后优先自动安装（pkexec 密码框 / 已配置的 sudo NOPASSWD），否则回退为手动命令。
  */
 export async function updateDebPackage(info?: UpdateInformationResource): Promise<void> {
 	let url = info?.url;
@@ -159,12 +236,16 @@ export async function updateDebPackage(info?: UpdateInformationResource): Promis
 		return;
 	}
 
+	if (await autoInstallDeb(dest)) {
+		return;
+	}
+
 	const cmd = `sudo apt install -y "${dest}"`;
 	const { response } = await dialog.showMessageBox({
 		title: 'OCS更新程序',
 		message:
 			`安装包已下载到：\n${dest}\n\n` +
-			`请在终端执行下面的命令完成安装（需要管理员权限，软件无法代替你执行）：\n\n${cmd}\n\n` +
+			`自动安装未完成（可能没有可用的系统授权弹窗），请在终端执行下面的命令完成安装：\n\n${cmd}\n\n` +
 			'安装完成后重新启动软件即可。',
 		type: 'info',
 		noLink: true,

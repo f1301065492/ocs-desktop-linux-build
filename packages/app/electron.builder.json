@@ -113,6 +113,6 @@
 			"gnome-keyring",
 			"xvfb"
 		],
-		"recommends": ["kwallet6"]
+		"recommends": ["kwallet6", "pkexec"]
 	}
 }
