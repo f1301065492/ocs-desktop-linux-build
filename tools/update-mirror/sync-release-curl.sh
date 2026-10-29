@@ -4,12 +4,11 @@
 # 与 sync-release.sh 的区别：
 #   - 不再要求 GitHub CLI / 登录，release 公开可直接下载；
 #   - 不传 tag 时通过 GitHub API 取 latest；
-#   - 下载后按 latest-linux.yml 里的 sha512 校验 AppImage；
-#   - 同步完成后删除目录里其它旧版本的 AppImage / deb，避免磁盘越堆越大。
+#   - 下载后按 latest-linux.yml 里的 sha512 校验 deb；
+#   - 同步完成后删除目录里其它旧版本 deb（以及历史遗留 AppImage），避免磁盘越堆越大。
 #
 # 目录约定（平铺，electron-updater 按文件名相对 feed 根目录解析）：
 #   /srv/ocs-dl/latest-linux.yml
-#   /srv/ocs-dl/ocs-<version>-setup-linux-x86_64.AppImage
 #   /srv/ocs-dl/ocs-<version>-setup-linux-amd64.deb
 #   /srv/ocs-dl/CHANGELOG.md            # 更新弹窗用
 #
