@@ -14,26 +14,98 @@ import type { Page } from 'playwright-core';
  */
 
 /**
- * 只推送需要人工处理的事件（与注入脚本里的 KEYWORDS 保持一致）。
+ * 只推送需要人工处理的事件（注入脚本与主进程兜底共用这一份）。
  * 单个任务点完成、任务点数量为空等流程进度**不在**白名单里。
+ *
+ * 词条来自 ocsjs 源码（packages/scripts/src）里所有 $message / $modal / $gm 通知，
+ * 按「需要人操作」筛选；新增脚本版本时对照补充。
  */
-export const PAGE_EVENT_RE =
-	/全部任务点|所有任务点|全部完成|所有完成|本课任务点.*完成|本章任务点.*完成|验证码|需要人工|人工处理|人工输入|请手动|登录失败|密码错误|账号或密码|滑块|人脸|扫码/;
+export const PAGE_EVENT_KEYWORDS = [
+	'(全部|所有)任务点?.*完成',
+	'(全部|所有)章节.*完成',
+	'全部任务已完成',
+	'所有完成',
+	'本课任务点.*完成',
+	'本章任务点.*完成',
+	'验证码',
+	'人脸识别',
+	'滑块',
+	'扫码',
+	'需要人工',
+	'人工处理',
+	'人工输入',
+	'请手动',
+	'请点击',
+	'请切换',
+	'请重新配置',
+	'请先.*配置题库',
+	'请自行检查',
+	'请刷新重试',
+	'请刷新页面重试',
+	'刷新界面重试',
+	'请尝试刷新',
+	'请尝试关闭页面',
+	'必须先点击',
+	'请保持.*前台',
+	'请手动关闭',
+	'点击任意.*开始',
+	'手动进入任意章节',
+	'未保存答案',
+	'未全部完成',
+	'剩余题目',
+	'闯关模式',
+	'脚本暂停',
+	'习惯分弹窗',
+	'全部播放完毕',
+	'题目包含图片.*未开启',
+	'已关闭此次的自动答题',
+	'获取课程数据失败',
+	'课程列表获取失败',
+	'元素加载失败',
+	'答题程序发生错误',
+	'作业/考试失败',
+	'登录失败',
+	'密码错误',
+	'账号或密码'
+];
+
+export const PAGE_EVENT_RE = new RegExp(PAGE_EVENT_KEYWORDS.join('|'));
 
 /** 页面说明类文案（使用提示、平台列表、交流群…）不是事件，忽略 */
-export const PAGE_INFORMATIONAL_RE =
-	/使用提示|兼容的网课平台|官方教程|交流群|更新日志|脚本猫|Tampermonkey|油猴|禁止|最小化|任务列表|自动阅读|积分课/;
+export const PAGE_INFORMATIONAL_KEYWORDS = [
+	'使用提示',
+	'兼容的网课平台',
+	'官方教程',
+	'交流群',
+	'更新日志',
+	'脚本猫',
+	'Tampermonkey',
+	'油猴',
+	'禁止',
+	'最小化',
+	'任务列表',
+	'自动阅读',
+	'积分课',
+	'即将跳过',
+	'验证码已完成',
+	'已进入学习页面'
+];
+
+export const PAGE_INFORMATIONAL_RE = new RegExp(PAGE_INFORMATIONAL_KEYWORDS.join('|'));
 
 export const PAGE_NOTIFY_SCRIPT = String.raw`
 (() => {
   try {
     if (window.__ocsNotifyHook) return;
     window.__ocsNotifyHook = true;
-    var KEYWORDS = /全部任务点|所有任务点|全部完成|所有完成|本课任务点.*完成|本章任务点.*完成|验证码|需要人工|人工处理|人工输入|请手动|登录失败|密码错误|账号或密码|滑块|人脸|扫码/;
-    // 用户脚本的说明面板（使用提示/平台列表/交流群…）不是事件，直接忽略
-    var IGNORE = /使用提示|兼容的网课平台|官方教程|交流群|更新日志|脚本猫|Tampermonkey|油猴|禁止|最小化|任务列表|自动阅读|积分课/;
-    var SELECTOR = '[role="dialog"],[class*="dialog"],[class*="modal"],'
-      + '[class*="message-box"],[class*="toast"],[class*="notice"],'
+    // 需人工介入的事件（与 PAGE_EVENT_KEYWORDS 保持一致）
+    var KEYWORDS = new RegExp(${JSON.stringify(PAGE_EVENT_KEYWORDS.join('|'))});
+    // 说明面板与「已恢复」类回执不是需要处理的事件
+    var IGNORE = new RegExp(${JSON.stringify(PAGE_INFORMATIONAL_KEYWORDS.join('|'))});
+    // message-element / modal-element 是 ocsjs 的 easy-us 组件自定义标签：
+    // 提示气泡没有 message-* 类名，只匹配 class 会整类漏掉。
+    var SELECTOR = 'message-element,modal-element,[role="dialog"],[class*="dialog"],[class*="modal"],'
+      + '[class*="message-box"],[class*="message-content"],[class*="toast"],[class*="notice"],'
       + '[class*="notification"]';
     var lastText = new WeakMap();
     var observedRoots = new WeakSet();
@@ -50,7 +122,7 @@ export const PAGE_NOTIFY_SCRIPT = String.raw`
       var changed = true;
       while (changed) {
         changed = false;
-        var next = value.replace(/\s*(?:×|✕|确定|取消|关闭|知道了|上一节|下一节|去学习)\s*$/, '').trim();
+        var next = value.replace(/\s*(?:×|✕|x|确定|取消|关闭|知道了|上一节|下一节|去学习)\s*$/, '').trim();
         if (next !== value) {
           value = next;
           changed = true;
