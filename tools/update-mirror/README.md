@@ -84,6 +84,12 @@ sudo bash sync-release.sh v2.13.25
 | `<prefix>/latest-linux.yml` | `no-cache` |
 | `<prefix>/CHANGELOG.md` | `no-cache` |
 
+**传输加速（推荐开启）**：GitHub 的 runner 在美国，直连
+`oss-cn-<region>.aliyuncs.com` 上行 271MB 要 5 分钟左右，中途进度条长时间不动，很像卡死。
+在 OSS 控制台给 bucket 开「传输加速」后，把 `OSS_ENDPOINT` 改成 `oss-accelerate.aliyuncs.com`
+（工作流会自动拼成 `<bucket>.oss-accelerate.aliyuncs.com`），实测同一个包 7.6 秒传完。
+客户端也填加速域名，国内访问会就近接入；传输加速按流量单独计费。
+
 **GitHub Secrets**（缺任意一个时该任务只告警跳过，不影响发版）：
 
 | Secret | 说明 |
