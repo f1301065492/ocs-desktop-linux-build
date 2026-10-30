@@ -2,12 +2,12 @@
 	<div class="setting container-md">
 		<a-card>
 			<template #title>
-				<span class="card-title-icon"
-					><img
-						src="../../../public/favicon.png"
-						width="22px"
-				/></span>
 				<a-space>
+					<span class="card-title-icon"
+						><img
+							src="../../../public/favicon.png"
+							width="22px"
+					/></span>
 					OCS脚本配置
 					<a-tag
 						v-if="store.render.setting.ocs.openSync"
@@ -52,7 +52,8 @@
 </template>
 
 <script setup lang="ts">
-import { t, store } from '../../store';
+import { store } from '../../store';
+import { t } from '../../utils/langs';
 import OCSConfigs from '../OCSConfigs.vue';
 import { Modal } from '@arco-design/web-vue';
 import { CircleCheckIcon, XIcon, RefreshCwIcon } from 'lucide-vue-next';

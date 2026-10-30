@@ -49,14 +49,20 @@
 							仅显示运行中
 						</span>
 					</span>
-					<a-button
-						type="outline"
-						size="mini"
-						class="ms-auto"
-						@click="switchToProfessional"
+					<!-- 切换到专业模式：仅图标，文案放入 tooltip；ms-auto 推到行尾 -->
+					<a-tooltip
+						content="专业模式"
+						position="bottom"
 					>
-						<a-space size="mini"><PanelLeftIcon />专业模式</a-space>
-					</a-button>
+						<a-button
+							type="outline"
+							size="mini"
+							class="ms-auto"
+							@click="switchToProfessional"
+						>
+							<template #icon><PanelLeftIcon /></template>
+						</a-button>
+					</a-tooltip>
 				</div>
 			</div>
 		</div>
@@ -167,11 +173,16 @@
 											</div>
 											<div
 												v-else
-												style="font-size: 12px"
-												class="text-center text-secondary"
+												class="d-flex justify-content-center align-items-center"
 											>
-												<IconInfoCircleFill /> 点击 启动 运行浏览器。<br />
-												单击 设置浏览器
+												<div
+													style="font-size: 12px"
+													class="text-left text-secondary"
+												>
+													<PlayCircleIcon /> 启动 运行浏览器 <br />
+													<MouseLeftIcon /> 左键 打开浏览器菜单 <br />
+													<MouseRightIcon /> 右键 快捷菜单
+												</div>
 											</div>
 										</template>
 
@@ -234,7 +245,14 @@ import EmptyBrowserCard from '../EmptyBrowserCard.vue';
 import BeginnerGuide from '../BeginnerGuide.vue';
 import BrowserPreview from './BrowserPreview.vue';
 import { getDisplayNotes } from '../../utils/display-notes';
-import { CirclePlusIcon, PanelLeftIcon, GlobeIcon } from 'lucide-vue-next';
+import {
+	CirclePlusIcon,
+	PanelLeftIcon,
+	GlobeIcon,
+	MouseLeftIcon,
+	MouseRightIcon,
+	PlayCircleIcon
+} from 'lucide-vue-next';
 
 /** 获取所有浏览器（递归） */
 const allBrowsers = computed(() => {
@@ -423,7 +441,7 @@ onActivated(() => {
 	padding: 2px 0px;
 }
 
-/* 顶部工具行：左侧卡片列数选择 + 紧凑开关，右侧布局切换按钮（与卡片网格同容器，边缘自然对齐） */
+/* 顶部工具行：左侧卡片列数选择 + 紧凑开关，右侧模式切换按钮（与卡片网格同容器，边缘自然对齐） */
 .layout-switch {
 	display: flex;
 	align-items: center;

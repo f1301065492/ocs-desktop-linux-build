@@ -95,13 +95,17 @@
 			<div class="status-bar-container">
 				<StatusBar />
 			</div>
+
+			<!-- 资源监控浮层：固定右下角置底（状态栏位于其上方），仅有浏览器运行时渲染 -->
+			<ResourceMonitor />
 		</div>
 	</a-config-provider>
 </template>
 
 <script setup lang="ts">
 import { watch, onMounted, onUnmounted } from 'vue';
-import { store, t } from './store';
+import { store } from './store';
+import { t } from './utils/langs';
 import { remote } from './utils/remote';
 import { root } from './fs/folder';
 import { electron } from './utils/node';
@@ -124,6 +128,7 @@ import zhCN from '@arco-design/web-vue/es/locale/lang/zh-cn';
 import debounce from 'lodash/debounce';
 import Title from './components/Title.vue';
 import StatusBar from './components/StatusBar.vue';
+import ResourceMonitor from './components/ResourceMonitor.vue';
 import BrowserPanel from './components/browsers/BrowserPanel.vue';
 import BrowserPanelOperators from './components/BrowserPanelOperators.vue';
 import Setup from './components/Setup.vue';
@@ -370,11 +375,11 @@ function onResize() {
 @import '@/assets/css/bootstrap.min.css';
 @import '@/assets/css/common.css';
 
-/* 全局状态栏：固定右下角，宽度自适应内容，向左扩展不遮挡右侧边缘 */
+/* 全局状态栏：固定右下角（资源监控浮层之上），宽度自适应内容，向左扩展不遮挡右侧边缘 */
 .status-bar-container {
 	position: fixed;
 	right: 12px;
-	bottom: 12px;
+	bottom: 48px;
 	z-index: 3000;
 	display: flex;
 	justify-content: flex-end;

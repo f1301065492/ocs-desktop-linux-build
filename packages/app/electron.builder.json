@@ -6,7 +6,6 @@
 		"description": "OCS 浏览器自动化神器，一键浏览器多开，用户脚本环境一键配置。"
 	},
 	"productName": "OCS Desktop",
-	"asar": false,
 	"directories": {
 		"output": "../../releases"
 	},
@@ -33,11 +32,7 @@
 	"nsis": {
 		"oneClick": true
 	},
-	"electronLanguages": [
-		"en-US",
-		"en-GB",
-		"zh-CN"
-	],
+	"electronLanguages": ["en-US", "en-GB", "zh-CN"],
 	"publish": {
 		"provider": "generic",
 		"url": "https://github.com/f1301065492/ocs-desktop-linux-build/releases/latest/download/"
@@ -76,6 +71,8 @@
 	},
 	"linux": {
 		"icon": "build/icons",
+		"executableName": "ocs-desktop",
+		"syncDesktopName": true,
 		"artifactName": "ocs-${version}-setup-${os}-${arch}.${ext}",
 		"target": [
 			{

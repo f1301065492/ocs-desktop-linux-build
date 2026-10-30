@@ -1,8 +1,9 @@
 {
 	"name": "@ocs-desktop/app",
-	"version": "3.6.0-5",
+	"version": "3.7.0-0",
 	"description": "desktop for userscript",
 	"main": "./out/main/index.js",
+	"desktopName": "ocs-desktop.desktop",
 	"scripts": {
 		"dev": "electron-vite dev",
 		"build": "electron-vite build",

@@ -4,7 +4,7 @@
 为了让后续合并上游更新时冲突面尽量小，**所有新增功能都放在独立的 `ext/` 目录里**，
 上游文件只保留少量带 `[ocs-ext]` 标记的钩子行。
 
-> 当前已同步到上游 `1cd52ba`（v3.6.0，2026-10-28）。最初的快照基线是 `4d3e596`（v2.13.0）。
+> 当前已同步到上游 `dffb2ea`（v3.7.0，2026-10-31）。最初的快照基线是 `4d3e596`（v2.13.0）。
 > 查当前所有钩子：`git grep -n "\[ocs-ext\]"`。
 
 ---
@@ -79,7 +79,7 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 | `packages/web/src/utils/remote.ts` | methods 键类型放宽（扩展 IPC 不在 common 契约内） |
 | `packages/web/src/fs/interface.ts` | `BrowserRemoteMeta`、`userscriptVersions`、`remoteMeta` |
 | `packages/web/src/fs/browser.ts` | `userscriptVersions`、`remoteMeta`、启动并发防护 |
-| `packages/web/src/utils/process.ts` | `notifyRealtime`、`clear_login_on_launch`、`appendLog` 实时上报、前置检查抛错 |
+| `packages/web/src/utils/process.ts` | `notifyRealtime`、`getRuntimeEnv` 兜底、`clear_login_on_launch`、`appendLog` 实时上报、前置检查抛错（3.7 起 fork 的 env 以上游 `workerEnv + getDisplayEnv` 为主，我们的 `getRuntimeEnv` 只补 PATH/HOME 等） |
 | `packages/web/src/utils/browser.ts` | `newBrowser` 的 `parentUid / uid / silent / remoteMeta` 选项 |
 | `packages/web/src/utils/script-version.ts` | 按浏览器取已安装版本 |
 
@@ -132,6 +132,12 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 - `.github/workflows/build-linux-deb.yml`、`packages/app/electron.builder.json`：Linux **只构建 deb**
   （不再构建/发布 AppImage），含 deb 依赖、图标、`tools/` 随包发布。
 - `packages/app/build/icons/`：多尺寸图标集。
+- **asar 打包（2026-10-31 采用上游 3.7 默认）**：`electron.builder.json` 不再写 `"asar": false`，
+  应用打进 `resources/app.asar`；`tools/ocs-openclaw` 仍走 `extraResources`（asar 外）。
+  上游实测 Electron 43 的 `child_process.fork` 能执行 asar 内 worker 脚本，本分支 fork 路径与其一致；
+  若日后 worker 启动报 `Cannot find module`，先把 `"asar": false` 加回去再排查。
+- **Linux 桌面项**：上游 3.7 起用 `packages/app/package.json` 的 `desktopName` + builder 的
+  `syncDesktopName: true`；deb 的图标仍用我们的 `build/icons` 多尺寸集（避免 hicolor 0x0）。
 - `.gitignore`：忽略三份只留本地的文件。
 
 ---

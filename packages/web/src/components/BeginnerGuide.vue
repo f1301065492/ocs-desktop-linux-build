@@ -51,7 +51,8 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue';
 import { CheckIcon, SettingsIcon, CirclePlayIcon, GraduationCapIcon } from 'lucide-vue-next';
-import { store, t } from '../store';
+import { store } from '../store';
+import { t } from '../utils/langs';
 import { useEnvironmentDetect } from '../composables/useEnvironmentDetect';
 import { processes } from '../utils/process';
 
@@ -120,10 +121,6 @@ onMounted(() => {
 	}
 	:deep(.arco-steps-item-tail) {
 		overflow: hidden;
-	}
-	/* 自定义图标在步骤槽位中偏上，下移与标题基线对齐 */
-	:deep(.arco-steps-icon svg) {
-		transform: translateY(2px);
 	}
 }
 </style>

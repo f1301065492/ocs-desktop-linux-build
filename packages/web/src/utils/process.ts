@@ -1,6 +1,7 @@
 import { ChildProcess } from 'child_process';
 import { remote } from './remote';
-import { t, store } from '../store';
+import { store } from '../store';
+import { t } from './langs';
 import { LaunchOptions } from 'playwright-core';
 import { reactive, h } from 'vue';
 import type { ScriptWorker, ScreencastPageInfo, ScreencastPagesChangedPayload } from '@ocs-desktop/common/web';
@@ -148,6 +149,10 @@ export class Process extends EventEmitter {
 	pages: ScreencastPageInfo[] = [];
 	/** 当前推流目标页 URL（worker pages-changed 事件实时更新） */
 	screencastPageUrl: string = '';
+	/** 浏览器实例真实内存占用 MB（worker 定时上报 memory-usage 事件更新，0 = 暂无数据） */
+	memoryUsageMB: number = 0;
+	/** 浏览器实例 CPU 占用率 %（worker 同事件上报，多核并行可超 100%，0 = 暂无数据） */
+	cpuPercent: number = 0;
 	/** 上一帧 Blob URL，用于更新前 revoke 避免内存泄漏 */
 	private _blobUrl: string = '';
 	/** 最近一帧的 base64（用于关闭时最终落盘） */
@@ -194,14 +199,26 @@ export class Process extends EventEmitter {
 	 * 使用 child_process 运行 ocs 命令
 	 */
 	async init(onConsole?: (data: any) => void) {
-		// [ocs-ext] 主进程的 DISPLAY/PATH 等显式合并进来：
-		// 渲染进程的 process.env 在 Electron 下可能不完整，worker 会拿不到 DISPLAY
+		// electron-vite 的 renderer 构建按浏览器环境编译，会把裸写的 process.env 整体替换为空对象 {}，
+		// 导致 worker 子进程丢失 DISPLAY/WAYLAND_DISPLAY/HOME 等全部环境变量，
+		// 其启动的浏览器因无显示服务器立即退出（Playwright 报 "Target page, context or browser has been closed"）。
+		// 注意：esbuild 的 define 会把 globalThis.process 等同于 process 标识符，一行连写的
+		// globalThis.process?.env 会被整体替换为 {}。必须先取出局部变量再访问 env 才能绕开词法匹配
+		// （已实测：拆行写法在构建产物中保留 globalThis.process，一行写法被替换为空对象）。
+		// 渲染进程开启 nodeIntegration，globalThis.process 即真实进程对象；
+		// 纯浏览器环境（导航页）下 globalThis.process 不存在，回退空对象（该环境不会执行 fork）。
+		const realProcess = (globalThis as any).process;
+		const workerEnv = realProcess?.env ?? process.env;
+		// [ocs-ext] 主进程的 PATH/HOME/LANG 等再兜一层：
+		// Chromium 沙箱可能把渲染进程 env 清空，仅有显示变量还不够（Xvfb / 内置 Chrome 都依赖 PATH/HOME）
 		const mainEnv = (await remote.methods.call('getRuntimeEnv').catch(() => null)) || {};
 		this.shell = child_process.fork(
 			await remote.path.call('join', await remote.app.call('getAppPath'), './out/main/script.js'),
 			{
 				stdio: ['ipc'],
-				env: { ...process.env, ...mainEnv }
+				// 双保险：workerEnv 提供全量环境变量（globalThis.process 绕开 esbuild define 替换）；
+				// 再叠加主进程真实显示变量与运行环境，兜底 Chromium 沙箱清理渲染进程 env 的场景
+				env: { ...workerEnv, ...remote.methods.callSync('getDisplayEnv'), ...mainEnv }
 			}
 		);
 		this.worker = createRemoteScriptWorker(this.shell);
@@ -244,6 +261,13 @@ export class Process extends EventEmitter {
 			'pages-changed': (_uid: string, payload: ScreencastPagesChangedPayload) => {
 				this.pages = payload?.pages || [];
 				this.screencastPageUrl = payload?.current || '';
+			},
+			/** 资源占用上报（worker 每 10s 推送，启动预检测/资源监控浮层使用真实值替代估算） */
+			'memory-usage': (_uid: string, payload: { mb: number; cpuPercent: number }) => {
+				if (payload && typeof payload.mb === 'number' && payload.mb > 0) {
+					this.memoryUsageMB = payload.mb;
+					this.cpuPercent = typeof payload.cpuPercent === 'number' ? payload.cpuPercent : 0;
+				}
 			},
 			/** 网页下载完成（worker 监听下载目录实时回传） */
 			'file-downloaded': (_uid: string, file: { filename: string; path: string }) => {

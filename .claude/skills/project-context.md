@@ -1,9 +1,12 @@
 # OCS Desktop — 项目技能文档
 
-> ⚠️ **2026-10-28 已同步上游 3.6.0**：构建链改为 **electron-vite**（主进程/渲染进程产物在
-> `packages/app/out/`，打包输出仓库根 `releases/`），跨进程类型契约下沉到 `@ocs-desktop/common`，
-> 自动更新改为 electron-updater。本文档中与构建/打包/类型位置相关的旧描述以仓库根
-> `package.json`、`FORK.md` 与 `packages/common/src/contract.ts` 为准。
+> ⚠️ **2026-10-31 已同步上游 3.7.0**：构建链仍为 **electron-vite**（主进程/渲染进程产物在
+> `packages/app/out/`，打包输出仓库根 `releases/`），跨进程类型契约在 `@ocs-desktop/common`，
+> 自动更新用 electron-updater。3.7 起新增：asar 打包默认开启、启动前内存/CPU 预检测
+> （`web/src/utils/launch-check.ts`）、资源统计与右下角监控浮层（`ResourceMonitor.vue`）、
+> 脚本配置手风琴面板、界面文案 i18n（`utils/langs.ts`）、`getDisplayEnv` 同步 IPC。
+> 本文档中与构建/打包/类型位置相关的旧描述以仓库根 `package.json`、`FORK.md`
+> 与 `packages/common/src/contract.ts` 为准。
 
 > 本文档面向 AI 助手阅读，提供项目全貌、架构规范、核心机制和开发约定，便于后续 AI 辅助开发时快速理解项目上下文。
 
@@ -138,6 +141,7 @@ packages/web/src/
 │   │   ├── FileOperators.vue       # 文件操作按钮
 │   │   └── FileMultipleOperators.vue # 多文件操作
 │   ├── SettingPanel.vue   # 设置面板
+│   ├── ResourceMonitor.vue # 右下角资源统计浮层（内存/CPU/已启动数）
 │   ├── Setup.vue          # 一键安装向导
 │   ├── NotificationBanner.vue # 全局 Banner 通知
 │   └── ...                # 其他通用组件
@@ -150,6 +154,8 @@ packages/web/src/
 │   ├── browser.ts         # 浏览器工具函数
 │   ├── resources.loader.ts # 资源加载器
 │   ├── script-version.ts  # 脚本版本检查
+│   ├── launch-check.ts    # 启动前内存/CPU 预检测（批量启动统一拦截）
+│   ├── langs.ts           # 界面文案（i18n 字典 + t/t.html）
 │   ├── user-scripts.ts    # 用户脚本工具
 │   ├── ipc.ts             # IPC 事件监听
 │   ├── markdown.ts        # Markdown 渲染
