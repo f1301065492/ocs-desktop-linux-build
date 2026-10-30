@@ -102,7 +102,10 @@ export function activeIpcRenderListener() {
 			maskClosable: false,
 			width: 500,
 			async onOk() {
-				await remote.methods.call('updateApp', new_version);
+				// 主进程只启动后台下载并立即返回，进度走 update-download 通知
+				await remote.methods.call('updateApp', new_version).catch((err) => {
+					console.error('启动更新失败', err);
+				});
 			},
 			content: () =>
 				h('div', [

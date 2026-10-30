@@ -199,10 +199,12 @@ export async function updater(config?: AppStore['updater']) {
  * IPC 方法名保持 updateApp 不变，内部由“下载zip+删目录+解压”改为 electron-updater 安装包下载。
  */
 export async function updateApp(newVersion?: UpdateInformationResource) {
-	// [ocs-ext] deb 安装：下载 deb 并给出 apt 安装命令
+	// 下载/安装是长任务（分钟级），不能阻塞这次 IPC：
+	// 渲染进程的 remote 调用有 30s 超时，await 整个下载会直接抛「remote 调用超时」。
+	// 这里只负责启动后台任务，进度通过 update-download 事件推送。
 	if (isDebInstall()) {
-		await updateDebPackage(newVersion);
+		updateDebPackage(newVersion).catch((e) => logger.error('deb 更新失败', e));
 		return;
 	}
-	await autoUpdater.downloadUpdate();
+	autoUpdater.downloadUpdate().catch((e) => logger.error('更新下载失败', e));
 }
