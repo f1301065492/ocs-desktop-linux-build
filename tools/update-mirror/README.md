@@ -64,6 +64,70 @@ sudo bash sync-release.sh v2.13.25
 如果 VPS 访问 GitHub 也不快，可以在能访问 GitHub 的机器上 `gh release download` 后
 `scp` 过去，再手工把 `latest-linux.yml` 和安装包放到根目录。
 
+## 阿里云 OSS 更新源（与 VPS 镜像并存）
+
+国内用户走 OSS 直连通常比「VPS + Cloudflare 反代」更快，且不用维护服务器。
+发版后由 `.github/workflows/sync-oss.yml` 自动把三件套传上去，与 VPS 同步任务并行。
+
+**OSS 侧**：
+
+1. 建 bucket（标准存储、地域就近），读写权限 **公共读**；
+2. **关闭「阻止公共访问」**（2023 年后新建 bucket 默认开启，不关公共读不生效，客户端会 403）；
+3. 不开静态网站托管、不开防盗链（客户端请求没有 Referer，开了必 403）；不需要 CORS；
+4. 用默认域名 `https://<bucket>.oss-cn-<region>.aliyuncs.com`（自带证书、无需备案）。
+
+对象布局（`<prefix>` 默认 `ocs`，可用 Secret `OSS_PREFIX` 改）：
+
+| 对象 | Cache-Control |
+| --- | --- |
+| `<prefix>/ocs-<version>-setup-linux-amd64.deb` | `public, max-age=31536000, immutable` |
+| `<prefix>/latest-linux.yml` | `no-cache` |
+| `<prefix>/CHANGELOG.md` | `no-cache` |
+
+**GitHub Secrets**（缺任意一个时该任务只告警跳过，不影响发版）：
+
+| Secret | 说明 |
+| --- | --- |
+| `OSS_ENDPOINT` | `oss-cn-hangzhou.aliyuncs.com`（可带 `https://`） |
+| `OSS_BUCKET` | bucket 名 |
+| `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET` | RAM 子账号 AccessKey |
+| `OSS_PREFIX` | 可选，默认 `ocs` |
+
+子账号只需要这个 bucket 的读写下权限，策略示例：
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:PutObject", "oss:GetObject", "oss:DeleteObject", "oss:ListObjects"],
+      "Resource": ["acs:oss:*:*:my-ocs", "acs:oss:*:*:my-ocs/ocs/*"]
+    }
+  ]
+}
+```
+
+配置命令：
+
+```bash
+gh secret set OSS_ENDPOINT --body "oss-cn-hangzhou.aliyuncs.com"
+gh secret set OSS_BUCKET --body "my-ocs"
+gh secret set OSS_ACCESS_KEY_ID --body "<AccessKeyId>"
+gh secret set OSS_ACCESS_KEY_SECRET --body "<AccessKeySecret>"
+```
+
+工作流会先校验「deb 文件名 = ocs-<yml.version>-setup-linux-amd64.deb」（客户端按这个规则拼地址）
+和 sha512，通过后才上传；顺序是先传 deb 再传清单，避免出现「有清单没包」的窗口期。
+上传后还会清理旧版本 deb，并回读一次公开 URL 确认 200 与 Range 206。
+
+**客户端**：设置 → 软件更新 → 自建镜像，填 `https://<bucket>.<endpoint>/<prefix>`。
+
+手动补同步：`gh workflow run sync-oss.yml`（可带 `-f tag=v3.6.0.5`）。
+
+> 注意：Windows/macOS 仍走 electron-updater 的 `latest.yml`，本项目只发 Linux，
+> OSS 上只需 Linux 三件套，那边会 404 并按「无更新」静默处理。
+
 ## Docker 部署（当前 VPS 的方式）
 
 用官方 `nginx:alpine` 容器只读挂载 `/srv/ocs-dl`，只监听回环，反向代理由面板/宿主机 nginx 负责：

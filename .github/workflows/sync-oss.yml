@@ -1,0 +1,209 @@
+name: Sync OSS Mirror
+
+# 发版后把 Release 的 Linux 三件套（deb / latest-linux.yml / CHANGELOG.md）
+# 传到阿里云 OSS，作为国内更新源。与 VPS 镜像（sync-mirror.yml）并存，
+# 客户端「自建镜像」填哪个都行，互不影响。
+#
+# 依赖的仓库 Secrets（缺任意一个时本任务只告警并跳过，不会让发版变红）：
+#   OSS_ENDPOINT            oss-cn-hangzhou.aliyuncs.com（可带 https://）
+#   OSS_BUCKET              bucket 名
+#   OSS_ACCESS_KEY_ID       RAM 子账号 AccessKey
+#   OSS_ACCESS_KEY_SECRET
+#   OSS_PREFIX              （可选）对象前缀，默认 ocs
+#
+# 客户端地址：https://<bucket>.<endpoint>/<prefix>
+#
+# 对象命名必须与客户端推导严格一致（packages/app/src/ext/update/deb.ts）：
+#   {prefix}/latest-linux.yml
+#   {prefix}/ocs-<yml里的version>-setup-linux-amd64.deb
+#   {prefix}/CHANGELOG.md
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag；留空自动取 latest
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag；留空自动取 latest
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # 缺配置时只告警跳过：OSS 是可选镜像，不该挡住发版本身
+      - name: Check secrets
+        id: cfg
+        env:
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -eu
+          missing=""
+          for name in OSS_ENDPOINT OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET; do
+            eval "value=\${$name:-}"
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::未配置 OSS Secrets:$missing，跳过 OSS 同步"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve tag
+        if: steps.cfg.outputs.enabled == 'true'
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "目标版本：$TAG"
+
+      - name: Download release assets
+        if: steps.cfg.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern 'latest-linux.yml' --pattern '*.deb' --pattern 'CHANGELOG.md'
+          ls -lh dist
+
+      # 客户端按 yml 里的 version 反推 deb 文件名，对不上就会 404；
+      # 先在这里卡住，比等用户端报错好查
+      - name: Verify manifest
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          yml=dist/latest-linux.yml
+          VER="$(sed -n 's/^version:[[:space:]]*//p' "$yml" | head -n1 | tr -d '\r')"
+          DEB="$(sed -n 's/^path:[[:space:]]*//p' "$yml" | head -n1 | tr -d '\r')"
+          WANT="$(sed -n 's/^sha512:[[:space:]]*//p' "$yml" | head -n1 | tr -d '\r')"
+          [ -n "$VER" ] || { echo "latest-linux.yml 缺少 version"; exit 1; }
+          if [ -z "$DEB" ]; then
+            DEB="$(sed -n 's/^[[:space:]]*- url:[[:space:]]*//p' "$yml" | head -n1 | tr -d '\r')"
+          fi
+          EXPECT="ocs-${VER}-setup-linux-amd64.deb"
+          [ "$DEB" = "$EXPECT" ] || {
+            echo "deb 文件名与客户端推导不一致：$DEB != $EXPECT"
+            exit 1
+          }
+          [ -f "dist/$DEB" ] || { echo "Release 里没有 $DEB"; exit 1; }
+          if [ -n "$WANT" ]; then
+            GOT="$(openssl dgst -sha512 -binary "dist/$DEB" | base64 -w0)"
+            [ "$GOT" = "$WANT" ] || { echo "deb sha512 校验失败"; exit 1; }
+            echo "sha512 校验通过"
+          fi
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "DEB=$DEB" >> "$GITHUB_ENV"
+
+      # ossutil v2 目前没有稳定的官方下载地址，用 1.7.18 的 GitHub 资产
+      - name: Install ossutil
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --retry-delay 2 -o ossutil.zip \
+            https://github.com/aliyun/ossutil/releases/download/v1.7.18/ossutil-v1.7.18-linux-amd64.zip
+          unzip -oq ossutil.zip -d ossutil-bin
+          BIN="$(find ossutil-bin -type f \( -name ossutil64 -o -name ossutil \) | head -n1)"
+          [ -n "$BIN" ] || { echo "压缩包里没有 ossutil 可执行文件"; find ossutil-bin -type f; exit 1; }
+          chmod +x "$BIN"
+          mv "$BIN" /usr/local/bin/ossutil
+          ossutil --version
+
+      - name: Upload to OSS
+        if: steps.cfg.outputs.enabled == 'true'
+        env:
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          set -euo pipefail
+          ENDPOINT="${OSS_ENDPOINT#http://}"; ENDPOINT="${ENDPOINT#https://}"; ENDPOINT="${ENDPOINT%/}"
+          PREFIX="${OSS_PREFIX:-ocs}"; PREFIX="${PREFIX#/}"; PREFIX="${PREFIX%/}"
+          BASE="oss://${OSS_BUCKET}/${PREFIX}/"
+          AUTH=(-e "$ENDPOINT" -i "$OSS_ACCESS_KEY_ID" -k "$OSS_ACCESS_KEY_SECRET")
+
+          # 先传安装包再传清单：顺序反了会出现「有清单、无包」的窗口期
+          ossutil cp -f "dist/$DEB" "$BASE" "${AUTH[@]}" \
+            --meta "Cache-Control:public, max-age=31536000, immutable" \
+            --part-size 16777216 --jobs 8
+
+          ossutil cp -f dist/CHANGELOG.md "${BASE}CHANGELOG.md" "${AUTH[@]}" \
+            --meta "Cache-Control:no-cache"
+
+          ossutil cp -f dist/latest-linux.yml "${BASE}latest-linux.yml" "${AUTH[@]}" \
+            --meta "Cache-Control:no-cache"
+
+          echo "已上传：${BASE}（version=$VER）"
+
+      # 旧版本 deb 清掉，避免每次发版多留 271MB；识别不了 ls 格式时直接跳过
+      - name: Prune old packages
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          set -uo pipefail
+          ENDPOINT="${OSS_ENDPOINT#http://}"; ENDPOINT="${ENDPOINT#https://}"; ENDPOINT="${ENDPOINT%/}"
+          PREFIX="${OSS_PREFIX:-ocs}"; PREFIX="${PREFIX#/}"; PREFIX="${PREFIX%/}"
+          BASE="oss://${OSS_BUCKET}/${PREFIX}/"
+          AUTH=(-e "$ENDPOINT" -i "$OSS_ACCESS_KEY_ID" -k "$OSS_ACCESS_KEY_SECRET")
+
+          ossutil ls "$BASE" "${AUTH[@]}" > /tmp/oss-ls.txt 2>/dev/null || { echo "ls 失败，跳过清理"; exit 0; }
+          awk '{print $NF}' /tmp/oss-ls.txt \
+            | grep -E "^oss://.*/ocs-.*\.deb$" \
+            | grep -v "/${DEB}$" > /tmp/oss-old.txt || true
+          [ -s /tmp/oss-old.txt ] || { echo "没有需要清理的旧包"; exit 0; }
+          while read -r obj; do
+            echo "删除旧包 $obj"
+            ossutil rm -f "$obj" "${AUTH[@]}" || echo "删除失败（忽略）：$obj"
+          done < /tmp/oss-old.txt
+
+      - name: Verify public URL
+        if: steps.cfg.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          set -uo pipefail
+          ENDPOINT="${OSS_ENDPOINT#http://}"; ENDPOINT="${ENDPOINT#https://}"; ENDPOINT="${ENDPOINT%/}"
+          PREFIX="${OSS_PREFIX:-ocs}"; PREFIX="${PREFIX#/}"; PREFIX="${PREFIX%/}"
+          ROOT="https://${OSS_BUCKET}.${ENDPOINT}/${PREFIX}"
+
+          echo "清单：$ROOT/latest-linux.yml"
+          curl -fsS --max-time 60 "$ROOT/latest-linux.yml" | head -5 || echo "::warning::清单读取失败（检查 bucket 是否公共读）"
+
+          # 分片下载依赖 206，返回 200 会退化成单线程
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -r 0-1023 "$ROOT/$DEB")"
+          echo "Range 探测：$CODE"
+          [ "$CODE" = "206" ] || echo "::warning::Range 请求返回 $CODE（期望 206）"

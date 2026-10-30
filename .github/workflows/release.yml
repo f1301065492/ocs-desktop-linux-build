@@ -88,3 +88,12 @@ jobs:
     needs: build-and-publish
     uses: ./.github/workflows/sync-mirror.yml
     secrets: inherit
+
+  # 同步到阿里云 OSS（国内更新源）。与 sync-mirror 并行，互不阻塞；
+  # OSS 相关 Secret 没配时该任务只告警跳过，不影响发版结果。
+  sync-oss:
+    needs: build-and-publish
+    uses: ./.github/workflows/sync-oss.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+    secrets: inherit

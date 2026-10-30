@@ -119,6 +119,11 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
   > ⚠️ worker 侧**不要 import `../logger`**：`logger.ts` 会 `require('electron')`，
   > worker 是纯 Node 子进程，一打包就报 `Cannot find module 'electron'`。用 `console` 输出。
 - `.github/workflows/release.yml`：只递增第四位（四段版本号的扩展序号）。
+- `.github/workflows/sync-oss.yml`（2026-10-30 新增）：发版后把 deb / `latest-linux.yml` /
+  `CHANGELOG.md` 传到阿里云 OSS，作为国内更新源；与 `sync-mirror.yml`（VPS）**并行**执行，
+  互不阻塞。上传前校验 deb 文件名与 sha512（客户端按 `ocs-<yml.version>-setup-linux-amd64.deb`
+  拼地址），Secret 缺失时只告警跳过、不影响发版。客户端「自建镜像」填
+  `https://<bucket>.<endpoint>/<prefix>`。
 - **更新检测（2026-10-29 起 Linux 只发 deb）**：**Linux** 走 `ext/update/deb.ts`，
   按 `latest-linux.yml` 检查版本、分片下载 deb（8 路并发 + 断点续传 + sha512 校验），
   下载完成后依次尝试 `pkexec`（系统密码框）/ `sudo -n`（NOPASSWD）自动安装，失败才回退
