@@ -132,8 +132,33 @@ jobs:
           mv "$BIN" /usr/local/bin/ossutil
           ossutil --version
 
-      - name: Upload to OSS
+      # 同版本重跑（手动补同步、失败重试）时跳过重复上传 271MB
+      - name: Check remote version
         if: steps.cfg.outputs.enabled == 'true'
+        id: remote
+        env:
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          set -uo pipefail
+          ENDPOINT="${OSS_ENDPOINT#http://}"; ENDPOINT="${ENDPOINT#https://}"; ENDPOINT="${ENDPOINT%/}"
+          PREFIX="${OSS_PREFIX:-ocs}"; PREFIX="${PREFIX#/}"; PREFIX="${PREFIX%/}"
+          ROOT="https://${OSS_BUCKET}.${ENDPOINT}/${PREFIX}"
+          REMOTE_VER="$(curl -fsS --max-time 30 "$ROOT/latest-linux.yml" 2>/dev/null \
+            | sed -n 's/^version:[[:space:]]*//p' | head -n1 | tr -d '\r' || true)"
+          REMOTE_SIZE="$(curl -sI --max-time 30 "$ROOT/$DEB" | tr -d '\r' \
+            | awk 'tolower($1)=="content-length:"{print $2; exit}' || true)"
+          echo "远端版本：${REMOTE_VER:-<无>}，远端 deb 大小：${REMOTE_SIZE:-<无>}"
+          if [ "$REMOTE_VER" = "$VER" ] && [ -n "$REMOTE_SIZE" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "已是 $VER，跳过上传"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload to OSS
+        if: steps.cfg.outputs.enabled == 'true' && steps.remote.outputs.skip != 'true'
         env:
           OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
           OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
