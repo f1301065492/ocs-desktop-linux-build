@@ -2,7 +2,7 @@ import { UpdateInformationResource } from '@ocs-desktop/common';
 import { store } from '../store';
 import { electron } from '../utils/node';
 import { notify } from './notify';
-import { Button, Modal, Progress } from '@arco-design/web-vue';
+import { Button, Modal, Notification, Progress } from '@arco-design/web-vue';
 import { h } from 'vue';
 import { marked } from 'marked';
 import { remote } from './remote';
@@ -31,7 +31,18 @@ export function activeIpcRenderListener() {
 	let updatePaused = false;
 	let updateLoaded = 0;
 	let updateTotal = 0;
+	/** 下载完成、进入安装阶段（此时暂停按钮失效，提示改为「正在安装」） */
+	let updateInstalling = false;
 	const renderUpdateProgress = () => {
+		if (updateInstalling) {
+			notify('OCS更新程序', '安装包下载完成，正在安装…（可能弹出系统密码框）', 'updater', {
+				type: 'info',
+				duration: 0,
+				close: false,
+				content: () => h('div', '安装包下载完成，正在安装…（可能弹出系统密码框，安装完成后会自动重启软件）')
+			});
+			return;
+		}
 		const percent = updateTotal > 0 ? updateLoaded / updateTotal : 0;
 		const sizeText = `${(updateLoaded / 1024 / 1024).toFixed(2)}MB/${(updateTotal / 1024 / 1024).toFixed(2)}MB`;
 		notify('OCS更新程序', `更新中: ${sizeText}`, 'updater', {
@@ -78,6 +89,21 @@ export function activeIpcRenderListener() {
 		renderUpdateProgress();
 	});
 
+	/** 下载完成，主进程开始安装（pkexec 会弹系统密码框）：把进度条换成「正在安装」 */
+	ipcRenderer.on('update-installing', () => {
+		updateInstalling = true;
+		renderUpdateProgress();
+	});
+
+	/**
+	 * 自动安装没成功（没有 pkexec / sudo NOPASSWD、或用户取消了密码框）：
+	 * 收起「正在安装」通知，主进程随后会弹出「复制安装命令」的兜底弹窗
+	 */
+	ipcRenderer.on('update-install-failed', () => {
+		updateInstalling = false;
+		Notification.remove('updater');
+	});
+
 	// 显示浏览器
 	ipcRenderer.on('show-browser-in-app', (e, uid) => {
 		store.render.browser.currentBrowserUid = uid;
@@ -90,6 +116,7 @@ export function activeIpcRenderListener() {
 			return;
 		}
 		updatePaused = false;
+		updateInstalling = false;
 		updateLoaded = 0;
 		updateTotal = 0;
 		ensureUpdaterChangelogStyle();

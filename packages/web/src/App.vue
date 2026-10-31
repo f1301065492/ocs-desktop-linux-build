@@ -285,7 +285,7 @@ onMounted(async () => {
 	let isExiting = false;
 
 	/** 完整退出流程：关闭浏览器 + 保存数据 + 退出应用。返回 false 表示用户取消了关闭 */
-	async function performFullExit(skipBrowserConfirm = false) {
+	async function performFullExit(skipBrowserConfirm = false, relaunch = false) {
 		console.log('关闭浏览器中...');
 		const res = await closeAllBrowser(skipBrowserConfirm);
 		if (res === false) {
@@ -300,7 +300,12 @@ onMounted(async () => {
 		console.log('数据已保存');
 		// 即将退出：销毁托盘避免 Windows 残留图标，再通过 quitApp 程序化退出（绕过隐藏到托盘）
 		remote.methods.call('destroyTray');
-		remote.methods.call('quitApp', 0);
+		if (relaunch) {
+			// [ocs-ext] 更新装完自动重启：拉起新版本（主进程内部 app.relaunch + 退出）
+			remote.methods.call('relaunchApp');
+		} else {
+			remote.methods.call('quitApp', 0);
+		}
 		return true;
 	}
 
@@ -347,6 +352,24 @@ onMounted(async () => {
 		if (isExiting) return;
 		isExiting = true;
 		if (!(await performFullExit())) {
+			isExiting = false;
+			remote.methods.call('cancelQuit');
+		}
+	});
+
+	/**
+	 * [ocs-ext] deb 更新安装完成：自动重启。
+	 * 主进程装完包（pkexec 输完密码 / sudo NOPASSWD）后发这个事件；
+	 * 这里复用「退出」的完整流程（关浏览器 → 同步存数据 → 销毁托盘），
+	 * 最后用 relaunchApp 拉起新版本，用户不需要再点「立即重启」。
+	 */
+	ipcRenderer.on('update-installed', async () => {
+		if (isExiting) return;
+		isExiting = true;
+		Message.success({ content: '更新完成，正在重启软件…', duration: 1500 });
+		// 留一点时间让提示渲染出来（关浏览器本身可能耗时几秒）
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		if (!(await performFullExit(true, true))) {
 			isExiting = false;
 			remote.methods.call('cancelQuit');
 		}

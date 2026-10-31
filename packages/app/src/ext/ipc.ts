@@ -26,6 +26,9 @@ import {
 	updateSshTunnelConfig
 } from './ssh/tunnel';
 import { isDebUpdateDownloadPaused, pauseDebUpdateDownload, resumeDebUpdateDownload } from './update/deb';
+import { app } from 'electron';
+import { quitApp } from '../tray';
+import { isDevMode } from '../utils';
 
 /**
  * 扩展功能通过 IPC 暴露给渲染进程的方法集合。
@@ -161,6 +164,23 @@ export const EXT_METHODS = {
 	pauseUpdateDownload: () => pauseDebUpdateDownload(),
 	resumeUpdateDownload: () => resumeDebUpdateDownload(),
 	isUpdateDownloadPaused: () => isDebUpdateDownloadPaused(),
+
+	/**
+	 * 重启应用（deb 更新装完后自动调用）。
+	 *
+	 * 渲染层已先关闭浏览器并同步保存数据，这里只负责「拉起新进程 + 退出旧进程」。
+	 * 走 quitApp() 置位 isQuitting，绕过「关闭窗口 = 隐藏到托盘」的逻辑；
+	 * dev 模式（pnpm dev）下 electron-vite 会随 quit 结束 dev server，
+	 * relaunch 出来的实例会白屏，因此只退出不重启（与 resetApp 的处理一致）。
+	 */
+	relaunchApp: () => {
+		if (isDevMode()) {
+			quitApp(0);
+			return;
+		}
+		app.relaunch();
+		quitApp(0);
+	},
 
 	/** 更新源配置：github / mirror */
 	updateSourceGet: () => getUpdateSourceConfig(),

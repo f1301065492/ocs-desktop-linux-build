@@ -1,4 +1,4 @@
-import { app, clipboard, dialog, shell } from 'electron';
+import { clipboard, dialog, shell } from 'electron';
 import axios from 'axios';
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -40,7 +40,8 @@ export function isDebUpdateDownloadPaused(): boolean {
  *
  * electron-updater 在 Linux 只支持 AppImage（没有 APPIMAGE 环境变量时直接拒绝），
  * 而服务器上用 deb 装在 /opt 的情况很常见。这里按 electron-updater 的 generic
- * 清单 latest-linux.yml 自己检查版本，再下载对应 deb 并给出 apt 安装命令。
+ * 清单 latest-linux.yml 自己检查版本，再分片下载 deb 并尝试自动安装
+ * （pkexec 密码框 → sudo -n → 回退手动命令），装完自动重启到新版本。
  */
 
 /** 是否为「Linux 且不是 AppImage 运行」 */
@@ -177,33 +178,53 @@ function installCandidates(debPath: string): Array<{ label: string; command: str
 	return list;
 }
 
-/** 自动安装 deb；成功时提示重启并返回 true，表示已处理完毕 */
+/**
+ * 给渲染层发一个更新阶段事件（update-installing / update-installed / update-install-failed）。
+ * 渲染层意外不可用时不抛错，只记日志：更新流程本身不能被界面拖垮。
+ */
+function sendUpdatePhase(channel: string): boolean {
+	try {
+		getCurrentWebContents().send(channel);
+		return true;
+	} catch (err) {
+		logger.warn(`通知渲染层 ${channel} 失败`, { error: err instanceof Error ? err.message : String(err) });
+		return false;
+	}
+}
+
+/** 自动安装 deb；成功时交给渲染层自动重启并返回 true，表示已处理完毕 */
 async function autoInstallDeb(debPath: string): Promise<boolean> {
 	if (!fs.existsSync(APT_GET)) {
 		logger.info('缺少 apt-get，跳过自动安装');
+		sendUpdatePhase('update-install-failed');
 		return false;
 	}
+	// 下载完成、进入安装阶段：进度条换成「正在安装」，暂停按钮不再有意义
+	sendUpdatePhase('update-installing');
 	for (const candidate of installCandidates(debPath)) {
 		logger.info(`尝试 ${candidate.label} 自动安装 deb`, { debPath });
 		const result = await runInstallCommand(candidate.command, candidate.args);
 		if (result.ok) {
-			const { response } = await dialog.showMessageBox({
-				title: 'OCS更新程序',
-				message: '更新完成，需要重启软件以使用新版本。',
-				type: 'info',
-				noLink: true,
-				buttons: ['立即重启', '稍后'],
-				defaultId: 0,
-				cancelId: 1
-			});
-			if (response === 0) {
-				app.relaunch();
-				app.exit(0);
+			// 安装成功即自动重启：不再弹「立即重启 / 稍后」让用户再点一次。
+			// 交给渲染层走完整退出流程（关闭所有浏览器 → 同步保存数据 → destroyTray），
+			// 最后由主进程 app.relaunch() + quitApp(0) 拉起新版本。
+			logger.info('deb 安装完成，通知渲染层自动重启', { label: candidate.label });
+			if (!sendUpdatePhase('update-installed')) {
+				// 渲染进程意外不可用（窗口已销毁等）：退化成提示用户手动重启，
+				// 不能在这里直接 app.exit —— 浏览器还没关、数据也还没落盘
+				await dialog.showMessageBox({
+					title: 'OCS更新程序',
+					message: '更新已安装完成，请手动重新打开软件以使用新版本。',
+					type: 'info',
+					noLink: true
+				});
 			}
 			return true;
 		}
 		logger.warn(`${candidate.label} 安装未完成`, { code: result.code, output: result.output.slice(-300) });
 	}
+	// 自动安装全部失败：收起「正在安装」通知，下面回退到手动命令弹窗
+	sendUpdatePhase('update-install-failed');
 	return false;
 }
 

@@ -89,11 +89,16 @@ jobs:
     uses: ./.github/workflows/sync-mirror.yml
     secrets: inherit
 
-  # 同步到阿里云 OSS（国内更新源）。与 sync-mirror 并行，互不阻塞；
-  # OSS 相关 Secret 没配时该任务只告警跳过，不影响发版结果。
-  sync-oss:
-    needs: build-and-publish
-    uses: ./.github/workflows/sync-oss.yml
-    with:
-      tag: ${{ needs.prepare.outputs.tag }}
-    secrets: inherit
+  # 同步到阿里云 OSS（国内更新源）。
+  # ⏸ 2026-10-31 起**暂时停用**：OSS 工作流已在仓库 Actions 里手动禁用，
+  # 发版不再自动往 OSS 上传（VPS 镜像 sync-mirror 仍是主更新源）。
+  # 恢复步骤：
+  #   1. 把下面这个 job 的注释去掉；
+  #   2. gh workflow enable sync-oss.yml --repo f1301065492/ocs-desktop-linux-build
+  #   3. 补跑一次：gh workflow run sync-oss.yml --repo f1301065492/ocs-desktop-linux-build
+  # sync-oss:
+  #   needs: build-and-publish
+  #   uses: ./.github/workflows/sync-oss.yml
+  #   with:
+  #     tag: ${{ needs.prepare.outputs.tag }}
+  #   secrets: inherit

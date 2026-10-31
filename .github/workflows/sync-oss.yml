@@ -1,5 +1,10 @@
 name: Sync OSS Mirror
 
+# ⏸ 2026-10-31 起**暂时停用**（仓库 Actions 里已手动禁用本工作流，
+# release.yml 也不再调用它）。VPS 镜像 sync-mirror.yml 是当前主更新源。
+# 恢复：gh workflow enable sync-oss.yml → 在 release.yml 里取消 sync-oss job 的注释
+#       → 可选补跑一次（gh workflow run sync-oss.yml -f tag=vX.Y.Z.N）
+#
 # 发版后把 Release 的 Linux 三件套（deb / latest-linux.yml / CHANGELOG.md）
 # 传到阿里云 OSS，作为国内更新源。与 VPS 镜像（sync-mirror.yml）并存，
 # 客户端「自建镜像」填哪个都行，互不影响。

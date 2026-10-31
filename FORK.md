@@ -131,15 +131,18 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
   > ⚠️ worker 侧**不要 import `../logger`**：`logger.ts` 会 `require('electron')`，
   > worker 是纯 Node 子进程，一打包就报 `Cannot find module 'electron'`。用 `console` 输出。
 - `.github/workflows/release.yml`：只递增第四位（四段版本号的扩展序号）。
-- `.github/workflows/sync-oss.yml`（2026-10-30 新增）：发版后把 deb / `latest-linux.yml` /
-  `CHANGELOG.md` 传到阿里云 OSS，作为国内更新源；与 `sync-mirror.yml`（VPS）**并行**执行，
-  互不阻塞。上传前校验 deb 文件名与 sha512（客户端按 `ocs-<yml.version>-setup-linux-amd64.deb`
-  拼地址），Secret 缺失时只告警跳过、不影响发版。客户端「自建镜像」填
-  `https://<bucket>.<endpoint>/<prefix>`。
+- `.github/workflows/sync-oss.yml`（2026-10-30 新增，**2026-10-31 起暂时停用**）：发版后把 deb /
+  `latest-linux.yml` / `CHANGELOG.md` 传到阿里云 OSS，作为国内更新源。停用方式：Actions 里手动禁用该
+  工作流 + `release.yml` 里注释掉 `sync-oss` job（被禁用的工作流仍能被 `workflow_call` 调用，只注释一边
+  等于没停）。恢复：`gh workflow enable sync-oss.yml` → 打开 `release.yml` 的注释 → 需要时补跑一次。
+  VPS 镜像（`sync-mirror.yml`）始终是主更新源。
 - **更新检测（2026-10-29 起 Linux 只发 deb）**：**Linux** 走 `ext/update/deb.ts`，
   按 `latest-linux.yml` 检查版本、分片下载 deb（8 路并发 + 断点续传 + sha512 校验），
   下载完成后依次尝试 `pkexec`（系统密码框）/ `sudo -n`（NOPASSWD）自动安装，失败才回退
-  手动命令；Windows / macOS 仍走 electron-updater。检查不再被 3s 上游 CDN 探测直接跳过，
+  手动命令。**2026-10-31 起装完不再弹「立即重启/稍后」**：安装成功即通知渲染层（`update-installed`），
+  渲染层走完整退出流程（关闭所有浏览器 → 同步保存数据 → 销毁托盘），再由主进程
+  `relaunchApp`（`app.relaunch()` + `quitApp(0)`）拉起新版本——用户输完系统密码框后无需再操作。
+  Windows / macOS 仍走 electron-updater。检查不再被 3s 上游 CDN 探测直接跳过，
   只用 15s 总超时兜底；国内网络可用设置页的「自建镜像」。
 - `.github/workflows/build-linux-deb.yml`、`packages/app/electron.builder.json`：Linux **只构建 deb**
   （不再构建/发布 AppImage），含 deb 依赖、图标、`tools/` 随包发布。
