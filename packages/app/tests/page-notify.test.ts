@@ -106,4 +106,19 @@ describe('页面通知白名单', () => {
 			expect(PAGE_NOTIFY_SCRIPT).toContain(keyword.replace(/\\/g, '\\\\'));
 		}
 	});
+
+	// 回归：智慧树答题页会把「原型被改写 / 可疑全局变量」判为「检测到异常脚本」，
+	// 注入脚本必须保持完全只读，不得篡改任何原生方法或留下可枚举全局。
+	it('注入脚本不篡改任何原生方法（原型保持原样）', () => {
+		// 注释里会提到 attachShadow，这里断言的是「没有对它赋值/重定义」
+		expect(PAGE_NOTIFY_SCRIPT).not.toMatch(/attachShadow\s*=/);
+		expect(PAGE_NOTIFY_SCRIPT).not.toMatch(/defineProperty\(\s*Element\.prototype/);
+		expect(PAGE_NOTIFY_SCRIPT).not.toMatch(/\.prototype\.[A-Za-z_]+\s*=/);
+	});
+
+	it('注入脚本不留下可枚举的 window 全局变量', () => {
+		expect(PAGE_NOTIFY_SCRIPT).not.toContain('__ocsNotifyHook');
+		expect(PAGE_NOTIFY_SCRIPT).toContain('Symbol.for');
+		expect(PAGE_NOTIFY_SCRIPT).toMatch(/enumerable:\s*false/);
+	});
 });

@@ -37,6 +37,8 @@ type BrowserConfig = {
 	download_optimization?: boolean;
 	/** [ocs-ext] 启动前清除该浏览器的登录状态（cookie / 站点本地存储） */
 	clear_login_on_launch?: boolean;
+	/** [ocs-ext] 页面内通知捕获：注入只读监听脚本（默认开启，关闭后不注入任何脚本） */
+	page_notify?: boolean;
 };
 
 interface Langs {
@@ -1163,7 +1165,9 @@ export async function launchBrowser({
 					enable_dialog: config?.enable_dialog,
 					userDataDir,
 					downloadsPath,
-					nativeDownloadRestored
+					nativeDownloadRestored,
+					// [ocs-ext] 页面内通知捕获（关闭后不注入脚本，避免平台误判「异常脚本」）
+					page_notify: config?.page_notify !== false
 				});
 
 				// 监听下载目录，新文件出现时通知渲染进程（原生落盘 / saveAs 兜底落盘的文件）
@@ -1732,13 +1736,24 @@ function browserNetworkRoute(authToken: string, browser: BrowserContext) {
 
 function handleBrowserInit(
 	browser: BrowserContext,
-	config: { enable_dialog?: boolean; userDataDir: string; downloadsPath?: string; nativeDownloadRestored?: boolean }
+	config: {
+		enable_dialog?: boolean;
+		userDataDir: string;
+		downloadsPath?: string;
+		nativeDownloadRestored?: boolean;
+		/** [ocs-ext] 页面内通知捕获开关 */
+		page_notify?: boolean;
+	}
 ) {
 	browser.addInitScript({
 		content: 'Object.defineProperty(navigator, "webdriver", { get: () => false });console.log(navigator)'
 	});
 	// [ocs-ext] 页面内通知监听（实现见 src/ext/page-notify.ts）
-	browser.addInitScript({ content: PAGE_NOTIFY_SCRIPT });
+	// 关闭后不注入任何脚本：智慧树等平台会把注入判为「检测到异常脚本」
+	const pageNotify = config?.page_notify !== false;
+	if (pageNotify) {
+		browser.addInitScript({ content: PAGE_NOTIFY_SCRIPT });
+	}
 
 	// 关闭检测
 	const interval = setInterval(async () => {
@@ -1758,7 +1773,7 @@ function handleBrowserInit(
 
 	const pageHandle = (page: Page) => {
 		// [ocs-ext] 页面内通知：把用户脚本画在 DOM 里的「需要人工处理」提示转发到 worker 日志
-		installPageNotifier(page);
+		if (pageNotify) installPageNotifier(page);
 
 		// 按照文档的说法，如果不进行任何处理，则动作会和原版浏览器一致
 		// 如果不进行监听 page.on('dialog') playwright 会自动处理弹窗

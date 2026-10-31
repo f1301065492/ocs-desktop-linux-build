@@ -123,6 +123,14 @@
 				</a-tooltip>
 			</Description>
 
+			<Description label="页面内通知">
+				<a-tooltip
+					content="向网页注入只读监听脚本，把用户脚本画在页面里的「全部完成 / 验证码」等提示转发到日志与主动通知。关闭后不向网页注入任何脚本——若某平台提示「检测到异常脚本」，可先关掉此项排除"
+				>
+					<a-switch v-model="store.render.setting.browser.pageNotify" />
+				</a-tooltip>
+			</Description>
+
 			<Description label="原生弹窗">
 				<a-tooltip content="启用后，浏览器中的原版弹窗可能会影响脚本运行">
 					<a-switch v-model="store.render.setting.browser.enableDialog" />

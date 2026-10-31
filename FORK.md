@@ -71,7 +71,7 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 | `packages/app/src/tasks/updater.ts` | `getUpdateSourceConfig`（镜像作为 generic feedUrl）、`getEffectiveFeedUrl`（更新弹窗的 CHANGELOG 走同一地址） |
 | `packages/app/src/worker/entry.ts` | `unhandledRejection` 兜底 |
 | `packages/common/src/contract.ts` | `clear_login_on_launch` |
-| `packages/app/src/worker/index.ts` | `listPagesExt`、`screenshotPageExt`、`clearLoginState`、`PAGE_NOTIFY_SCRIPT`、`installPageNotifier` |
+| `packages/app/src/worker/index.ts` | `listPagesExt`、`screenshotPageExt`、`clearLoginState`、`PAGE_NOTIFY_SCRIPT`、`page_notify`、`installPageNotifier` |
 | `packages/web/src/App.vue` | `startRemoteApiWorker`、`startDshNotifyIfEnabled`（3.6 起上游用原生圆角窗口，原来的 `window-maximize-change` 圆角钩子已删） |
 | `packages/web/src/components/SettingPanel.vue` | `<ExtSettingsCards />`、`<ClearLoginOnLaunchSetting />` |
 | `packages/web/src/components/Title.vue` | `ocsdata:v2` 旧格式导入兼容 |
@@ -82,6 +82,18 @@ tools/update-mirror/             自建更新源同步脚本与 nginx 配置
 | `packages/web/src/utils/process.ts` | `notifyRealtime`、`getRuntimeEnv` 兜底、`clear_login_on_launch`、`appendLog` 实时上报、前置检查抛错（3.7 起 fork 的 env 以上游 `workerEnv + getDisplayEnv` 为主，我们的 `getRuntimeEnv` 只补 PATH/HOME 等） |
 | `packages/web/src/utils/browser.ts` | `newBrowser` 的 `parentUid / uid / silent / remoteMeta` 选项 |
 | `packages/web/src/utils/script-version.ts` | 按浏览器取已安装版本 |
+
+### ⚠️ 往网页里注入脚本的硬约束（2026-10-31 定）
+
+页面注入脚本（目前只有 `ext/page-notify.ts`，可选开关「设置 → 浏览器设置 → 页面内通知」）**必须完全只读**：
+
+- **不得改写任何原生方法/原型**（`Element.prototype.attachShadow`、`XMLHttpRequest.prototype.open` …）。
+  智慧树等平台会校验 `fn.toString()` 里是否含 `[native code]`，一旦被改写就直接提示「检测到异常脚本」，
+  答题/考试页不可用——2026-10 的 closed shadow root 覆盖就是这样踩的，已回退。
+- **不得新增可枚举的 window 字符串属性**（旧版的 `__ocsNotifyHook` 已改成 `Symbol.for(...)` 非枚举标记）。
+- 读 DOM（MutationObserver / querySelector）本身没问题；`console.log` 只在命中白名单事件时才输出。
+
+单测 `packages/app/tests/page-notify.test.ts` 里有对应回归断言（检查注入脚本里没有原型赋值、没有可疑全局名）。
 
 ### 被整体替换 / 大改的上游文件
 

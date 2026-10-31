@@ -11,6 +11,11 @@ import type { Page } from 'playwright-core';
  * 与上游的接点只有两处（都在 worker/index.ts）：
  *   browser.addInitScript({ content: PAGE_NOTIFY_SCRIPT })
  *   installPageNotifier(page)
+ *
+ * ⚠️ 注入脚本必须「只读」：不改写任何原生方法/原型、不新增可枚举的 window 全局。
+ * 智慧树等平台会校验原生函数 toString，2026-10-31 就是因为我们包装了
+ * Element.prototype.attachShadow 被判「检测到异常脚本」，已彻底回退（见 FORK.md）。
+ * 想关掉整个注入：设置 → 浏览器设置 → 页面内通知（worker 配置项 page_notify）。
  */
 
 /**
@@ -83,8 +88,11 @@ export const PAGE_INFORMATIONAL_RE = new RegExp(PAGE_INFORMATIONAL_KEYWORDS.join
 export const PAGE_NOTIFY_SCRIPT = String.raw`
 (() => {
   try {
-    if (window.__ocsNotifyHook) return;
-    window.__ocsNotifyHook = true;
+    // 幂等标记用 Symbol：不出现在 window 的字符串键枚举里，
+    // 也不留下带产品名的字符串全局变量（那种名字最容易被平台规则点名）
+    var GUARD = Symbol.for('page.events.capture');
+    if (Object.prototype.hasOwnProperty.call(window, GUARD)) return;
+    Object.defineProperty(window, GUARD, { value: true, enumerable: false, configurable: false });
     // 需人工介入的事件（与 PAGE_EVENT_KEYWORDS 保持一致）
     var KEYWORDS = new RegExp(${JSON.stringify(PAGE_EVENT_KEYWORDS.join('|'))});
     // 说明面板与「已恢复」类回执不是需要处理的事件
@@ -177,18 +185,13 @@ export const PAGE_NOTIFY_SCRIPT = String.raw`
       }
     }
     var observer = new MutationObserver(handle);
-    // 用户脚本的弹窗常放在 Shadow DOM（甚至 closed）里：包装 attachShadow
-    // 拿到真实 root 后直接观察，closed 模式也能覆盖。
-    try {
-      var nativeAttach = Element.prototype.attachShadow;
-      if (typeof nativeAttach === 'function') {
-        Element.prototype.attachShadow = function (init) {
-          var root = nativeAttach.call(this, init);
-          try { observeRoot(root); } catch (e) {}
-          return root;
-        };
-      }
-    } catch (e) {}
+    // ⚠️ 这里**不做任何原型篡改**（2026-10-31 修复智慧树「检测到异常脚本」）。
+    // 曾经包装过 Element.prototype.attachShadow 以覆盖 closed shadow root，
+    // 但智慧树等平台会校验原生函数（attachShadow.toString() 必须含 [native code]），
+    // 一旦发现自己被改写就直接判「检测到异常脚本」，答题/考试页直接不可用。
+    // 现在只观察 light DOM 与已开放的 shadowRoot（下面 inspect 里的 el.shadowRoot），
+    // closed shadow root 里的弹窗不再覆盖：宁可少收一条通知，也不能让整站判为异常脚本。
+    // 同理，注入脚本不得新增任何可枚举的 window 全局、不得改写任何原生方法。
     function start() {
       observeRoot(document.documentElement);
       inspect(document.body);

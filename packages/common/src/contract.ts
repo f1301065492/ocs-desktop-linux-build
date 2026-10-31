@@ -172,6 +172,11 @@ export interface ScriptWorkerBrowserConfig {
 	/** [ocs-ext] 启动前清除该浏览器的登录状态（cookie / 站点本地存储） */
 	clear_login_on_launch?: boolean;
 	/**
+	 * [ocs-ext] 页面内通知捕获：注入只读监听脚本，把页面里的「全部完成 / 验证码」等提示
+	 * 转发到 worker 日志。默认 true；关闭后不注入任何脚本（平台把注入判为异常脚本时用）。
+	 */
+	page_notify?: boolean;
+	/**
 	 * 软件辅助：监听浏览器路由（ocs-environment / ocs-script-actions）与用户脚本联动。
 	 * 默认 true；关闭后脚本不再识别为软件环境（自动化增强不可用），用于卡顿排查。
 	 */

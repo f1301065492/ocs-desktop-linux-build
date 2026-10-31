@@ -79,6 +79,12 @@ export type WebStore = {
 			memoryCheck: boolean;
 			/** 资源监控浮层：有浏览器运行时在右下角显示全部浏览器的 CPU/内存占用统计 */
 			resourceMonitor: boolean;
+			/**
+			 * [ocs-ext] 页面内通知捕获：向网页注入只读监听脚本，把用户脚本画在页面里的
+			 * 「全部完成 / 验证码」等提示转发到日志与主动通知。
+			 * 关闭后不向网页注入任何脚本（部分平台会把注入判为「异常脚本」时用）。
+			 */
+			pageNotify: boolean;
 			/** 导航页设置 */
 			bookmarkPage: {
 				/** 是否启用自定义导航页（关闭后不更改浏览器新建页面，显示默认空白导航页） */
@@ -197,6 +203,8 @@ export const DEFAULT_RENDER = {
 			browserEnhancement: false,
 			memoryCheck: true,
 			resourceMonitor: true,
+			// [ocs-ext] 页面内通知捕获默认开启（关闭后不向网页注入任何脚本）
+			pageNotify: true,
 			bookmarkPage: {
 				enable: true,
 				enableSearch: true,

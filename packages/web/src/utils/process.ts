@@ -348,6 +348,8 @@ export class Process extends EventEmitter {
 				browser_enhancement: store.render.setting.browser.browserEnhancement,
 				// [ocs-ext] 启动前清除登录状态
 				clear_login_on_launch: store.render.setting.browser.clearLoginOnLaunch,
+				// [ocs-ext] 页面内通知捕获（关闭后不向网页注入任何脚本）
+				page_notify: store.render.setting.browser.pageNotify !== false,
 				// 开发者设置开关（默认开启）：软件辅助（脚本联动路由监听）与文件下载优化
 				script_assistance: store.render.setting.dev?.scriptAssistance !== false,
 				download_optimization: store.render.setting.dev?.downloadOptimization !== false
